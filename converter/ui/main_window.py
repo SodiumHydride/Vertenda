@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Main window: assembles tabs, routes actions to ConvertWorker."""
+"""Main window: assembles tabs, routes actions to TaskCoordinator.
+
+Integrates: queue panel, result panel, estimate dialog, presets, history,
+global drag-and-drop, keyboard shortcuts, notifications.
+"""
 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
+import time
 
 from PyQt5.QtCore import QDir, QSettings, Qt
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -20,8 +26,11 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QShortcut,
+    QSplitter,
     QStatusBar,
     QTabWidget,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -38,8 +47,25 @@ from ..constants import (
     is_video_file,
     resource_path,
 )
-from ..ffmpeg.quality import QualityPreset, parse as parse_preset
-from ..worker import BurnOptions, ConvertTask, ConvertWorker, TaskKind
+from ..estimator import estimate_task
+from ..ffmpeg.commands import build_convert_cmd, build_extract_audio_cmd
+from ..ffmpeg.probe import probe_full
+from ..ffmpeg.quality import QualityPreset, parse as parse_preset, spec_for
+from ..fs import ConflictPolicy
+from ..history import HistoryRecord, TaskHistory
+from ..notify import send_notification
+from ..planning import plan_output_paths
+from ..presets import PresetStore, TaskPreset
+from ..queue import (
+    EventType,
+    ExecutionEvent,
+    FileResult,
+    FileStatus,
+    TaskCoordinator,
+    resolve_concurrency,
+)
+from ..subtitle.styling_config import BurnStyle
+from ..worker import BurnOptions, ConvertTask, TaskKind
 from .file_list import CustomAction
 from .settings_dialog import SettingsDialog
 from .tabs import (
@@ -57,11 +83,14 @@ def _tab_kind_label(index: int) -> str:
     return {0: "音频", 1: "视频", 2: "字幕", 3: "字幕烧录"}.get(index, "未知")
 
 
-class ConverterMainWindow(QMainWindow):
-    _DEFAULT_WIDTH = 1280
-    _DEFAULT_HEIGHT = 840
+def _tab_kind_key(index: int) -> str:
+    return {0: "audio", 1: "video", 2: "subtitle", 3: "burn"}.get(index, "")
 
-    # Tab indices (kept here for a single place to swap them).
+
+class ConverterMainWindow(QMainWindow):
+    _DEFAULT_WIDTH = 1400
+    _DEFAULT_HEIGHT = 880
+
     TAB_AUDIO = 0
     TAB_VIDEO = 1
     TAB_SUBTITLE = 2
@@ -71,21 +100,32 @@ class ConverterMainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("盐酸转换器 · Kurisu Edition")
         self.resize(self._DEFAULT_WIDTH, self._DEFAULT_HEIGHT)
-        self.setMinimumSize(1000, 680)
+        self.setMinimumSize(1060, 700)
+        self.setAcceptDrops(True)
 
         icon_path = resource_path("resources/favicon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
         self._setup_settings()
-        self._worker: ConvertWorker | None = None
+        self._coordinator = TaskCoordinator(self)
+        self._file_results: list[FileResult] = []
+        self._conversion_start_time = 0.0
         self._bg_pixmap: QPixmap | None = None
         self._overlay_color: tuple[int, int, int] = (0, 0, 0)
-        self._overlay_alpha: int = 0  # 0..255
+        self._overlay_alpha: int = 0
+        # Track the ConvertTask currently being consumed by the coordinator
+        # so history can reference it after the queue drains or is cancelled.
+        self._active_task: ConvertTask | None = None
+
+        self._history = TaskHistory(self.settings)
+        self._preset_store = PresetStore(self.settings)
+        self._preset_store.ensure_builtins()
 
         self._build_ui()
         self._wire_signals()
         self._install_inter_tab_actions()
+        self._install_shortcuts()
         self._apply_settings()
         self._restore_last_selections()
 
@@ -106,6 +146,14 @@ class ConverterMainWindow(QMainWindow):
                 SettingsKey.USE_HW_ACCEL: False,
                 SettingsKey.QUALITY_PRESET: "balanced",
                 SettingsKey.OUTPUT_PATH: os.path.join(runtime_dir, "output"),
+                SettingsKey.DEFAULT_CONFLICT_POLICY: "ask",
+                SettingsKey.DEFAULT_FILENAME_TEMPLATE: "{base}",
+                SettingsKey.DEFAULT_MIRROR_SUBDIRS: False,
+                SettingsKey.DEFAULT_CONTINUE_ON_FAILURE: True,
+                SettingsKey.CONCURRENCY_MODE: "auto",
+                SettingsKey.NOTIFY_ON_COMPLETE: True,
+                SettingsKey.SOUND_ON_COMPLETE: False,
+                SettingsKey.OPEN_OUTPUT_ON_COMPLETE: False,
             }
             for k, v in defaults.items():
                 self.settings.setValue(k, v)
@@ -114,11 +162,18 @@ class ConverterMainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget(self)
         self.setCentralWidget(root)
-        root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(14, 12, 14, 10)
-        root_layout.setSpacing(10)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        root_layout.addLayout(self._build_top_bar())
+        self._splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(14, 12, 14, 10)
+        left_layout.setSpacing(10)
+
+        left_layout.addLayout(self._build_top_bar())
 
         self.tabs = QTabWidget(self)
         self.audio_handles = build_audio_tab()
@@ -129,17 +184,26 @@ class ConverterMainWindow(QMainWindow):
         self.tabs.addTab(self.video_handles.widget, "视频转换")
         self.tabs.addTab(self.subtitle_handles.widget, "字幕转换")
         self.tabs.addTab(self.burn_handles.widget, "字幕烧录")
-        root_layout.addWidget(self.tabs, stretch=3)
+        left_layout.addWidget(self.tabs, stretch=3)
 
+        mid_splitter = QSplitter(Qt.Horizontal)
         self.log_display = QPlainTextEdit()
         self.log_display.setReadOnly(True)
         self.log_display.setPlaceholderText("日志输出...")
         self.log_display.setMaximumBlockCount(2000)
-        root_layout.addWidget(self.log_display, stretch=2)
+        mid_splitter.addWidget(self.log_display)
+
+        self.info_panel = QTextEdit()
+        self.info_panel.setReadOnly(True)
+        self.info_panel.setPlaceholderText("选中文件查看元信息")
+        self.info_panel.setMaximumWidth(320)
+        self.info_panel.setMinimumWidth(160)
+        mid_splitter.addWidget(self.info_panel)
+        mid_splitter.setSizes([600, 280])
+        left_layout.addWidget(mid_splitter, stretch=2)
 
         progress_block = QVBoxLayout()
         progress_block.setSpacing(4)
-
         status_row = QHBoxLayout()
         self.current_file_label = QLabel("就绪")
         self.current_file_label.setObjectName("HintLabel")
@@ -169,8 +233,7 @@ class ConverterMainWindow(QMainWindow):
         main_progress_row.addWidget(self.progress_bar)
         main_progress_row.addWidget(self.time_label)
         progress_block.addLayout(main_progress_row)
-
-        root_layout.addLayout(progress_block)
+        left_layout.addLayout(progress_block)
 
         action_row = QHBoxLayout()
         self.btn_start = QPushButton("开始转换")
@@ -178,14 +241,28 @@ class ConverterMainWindow(QMainWindow):
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.setObjectName("DangerButton")
         self.btn_cancel.setEnabled(False)
+        self.btn_export_log = QPushButton("导出日志")
         self.btn_open_output = QPushButton("打开输出目录")
         self.btn_close = QPushButton("关闭")
         action_row.addWidget(self.btn_start)
         action_row.addWidget(self.btn_cancel)
         action_row.addStretch()
+        action_row.addWidget(self.btn_export_log)
         action_row.addWidget(self.btn_open_output)
         action_row.addWidget(self.btn_close)
-        root_layout.addLayout(action_row)
+        left_layout.addLayout(action_row)
+
+        self._splitter.addWidget(left)
+
+        from .queue_panel import QueuePanel
+        self.queue_panel = QueuePanel()
+        self.queue_panel.set_coordinator(self._coordinator)
+        self.queue_panel.setMinimumWidth(200)
+        self.queue_panel.setMaximumWidth(360)
+        self._splitter.addWidget(self.queue_panel)
+        self._splitter.setSizes([1100, 260])
+
+        root_layout.addWidget(self._splitter)
 
         self.status_bar = QStatusBar(self)
         self.status_bar.setSizeGripEnabled(False)
@@ -210,16 +287,60 @@ class ConverterMainWindow(QMainWindow):
         self.quality_badge.setObjectName("HintLabel")
         bar.addWidget(self.quality_badge)
 
+        self.btn_history = QToolButton()
+        self.btn_history.setText("历史")
+        self.btn_history.clicked.connect(self._open_history)
+        bar.addWidget(self.btn_history)
+
         self.btn_settings = QToolButton()
         self.btn_settings.setText("设置")
         bar.addWidget(self.btn_settings)
         return bar
 
+    # ---- Keyboard shortcuts -------------------------------------------
+    def _install_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Ctrl+O"), self, self._shortcut_add_files)
+        QShortcut(QKeySequence("Ctrl+Shift+O"), self, self._shortcut_add_dir)
+        QShortcut(QKeySequence("Delete"), self, self._shortcut_remove)
+        QShortcut(QKeySequence("Ctrl+,"), self, self._open_settings)
+
+    def _shortcut_add_files(self) -> None:
+        idx = self.tabs.currentIndex()
+        handlers = {
+            self.TAB_AUDIO: (self.audio_handles.file_list, "音频", AUDIO_EXTS),
+            self.TAB_VIDEO: (self.video_handles.file_list, "视频", VIDEO_EXTS),
+            self.TAB_SUBTITLE: (self.subtitle_handles.file_list, "字幕", SUBTITLE_EXTS),
+        }
+        if idx in handlers:
+            fl, lbl, exts = handlers[idx]
+            self._add_files(fl, lbl, exts)
+
+    def _shortcut_add_dir(self) -> None:
+        idx = self.tabs.currentIndex()
+        handlers = {
+            self.TAB_AUDIO: (self.audio_handles.file_list, AUDIO_EXTS),
+            self.TAB_VIDEO: (self.video_handles.file_list, VIDEO_EXTS),
+            self.TAB_SUBTITLE: (self.subtitle_handles.file_list, SUBTITLE_EXTS),
+        }
+        if idx in handlers:
+            fl, exts = handlers[idx]
+            self._add_directory(fl, exts)
+
+    def _shortcut_remove(self) -> None:
+        idx = self.tabs.currentIndex()
+        lists = {
+            self.TAB_AUDIO: self.audio_handles.file_list,
+            self.TAB_VIDEO: self.video_handles.file_list,
+            self.TAB_SUBTITLE: self.subtitle_handles.file_list,
+        }
+        fl = lists.get(idx)
+        if fl:
+            fl.remove_selected()
+
     # ---- Signal wiring -------------------------------------------------
     def _wire_signals(self) -> None:
         self.btn_settings.clicked.connect(self._open_settings)
 
-        # Audio tab
         self.audio_handles.btn_add.clicked.connect(
             lambda: self._add_files(self.audio_handles.file_list, "音频", AUDIO_EXTS)
         )
@@ -229,7 +350,6 @@ class ConverterMainWindow(QMainWindow):
         self.audio_handles.btn_remove.clicked.connect(self.audio_handles.file_list.remove_selected)
         self.audio_handles.btn_clear.clicked.connect(self.audio_handles.file_list.clear_all)
 
-        # Video tab
         self.video_handles.btn_add.clicked.connect(
             lambda: self._add_files(self.video_handles.file_list, "视频", VIDEO_EXTS)
         )
@@ -239,7 +359,6 @@ class ConverterMainWindow(QMainWindow):
         self.video_handles.btn_remove.clicked.connect(self.video_handles.file_list.remove_selected)
         self.video_handles.btn_clear.clicked.connect(self.video_handles.file_list.clear_all)
 
-        # Subtitle tab
         self.subtitle_handles.btn_add.clicked.connect(
             lambda: self._add_files(self.subtitle_handles.file_list, "字幕", SUBTITLE_EXTS)
         )
@@ -249,7 +368,6 @@ class ConverterMainWindow(QMainWindow):
         self.subtitle_handles.btn_remove.clicked.connect(self.subtitle_handles.file_list.remove_selected)
         self.subtitle_handles.btn_clear.clicked.connect(self.subtitle_handles.file_list.clear_all)
 
-        # Burn tab
         self.burn_handles.btn_add_video.clicked.connect(
             lambda: self._add_files(self.burn_handles.video_list, "视频", VIDEO_EXTS)
         )
@@ -263,11 +381,33 @@ class ConverterMainWindow(QMainWindow):
 
         self.btn_start.clicked.connect(self._start_conversion)
         self.btn_cancel.clicked.connect(self._cancel_conversion)
+        self.btn_export_log.clicked.connect(self._export_log)
         self.btn_open_output.clicked.connect(self._open_output_dir)
         self.btn_close.clicked.connect(self.close)
 
+        hub = self._coordinator.hub
+        hub.file_started.connect(self._on_current_file)
+        hub.file_progress.connect(self.file_progress.setValue)
+        hub.file_time.connect(self.time_label.setText)
+        hub.overall_progress.connect(self.progress_bar.setValue)
+        hub.eta.connect(self._on_eta)
+        hub.log.connect(self._append_log)
+        hub.error.connect(self._on_coordinator_error)
+        hub.file_done.connect(self._on_file_done)
+        hub.execution_event.connect(self._on_execution_event)
+        self._coordinator.all_done.connect(self._on_all_done)
+
+        self.queue_panel.pause_requested.connect(self._coordinator.pause)
+        self.queue_panel.resume_requested.connect(self._coordinator.resume)
+        self.queue_panel.skip_requested.connect(self._coordinator.skip_current)
+        self.queue_panel.cancel_all_requested.connect(self._cancel_conversion)
+
+        # File info preview on selection change
+        for fl in (self.audio_handles.file_list, self.video_handles.file_list,
+                    self.subtitle_handles.file_list):
+            fl.currentItemChanged.connect(self._on_file_selection_changed)
+
     def _install_inter_tab_actions(self) -> None:
-        """Right-click a file -> 'send to another tab'. Keeps tabs coordinated."""
         self.video_handles.file_list.register_action(CustomAction(
             "发送到 字幕烧录 (视频)",
             handler=lambda paths: self._send_to(self.burn_handles.video_list, paths, "视频已加入烧录 Tab"),
@@ -283,6 +423,14 @@ class ConverterMainWindow(QMainWindow):
             handler=lambda paths: self._send_to(self.video_handles.file_list, paths, "音频已加入视频 Tab"),
             enabled=lambda paths: any(is_audio_file(p) for p in paths),
         ))
+        # Copy ffmpeg command (all media tabs)
+        for fl, kind in ((self.audio_handles.file_list, TaskKind.AUDIO),
+                         (self.video_handles.file_list, TaskKind.VIDEO)):
+            fl.register_action(CustomAction(
+                "复制 ffmpeg 命令",
+                handler=lambda paths, k=kind: self._copy_ffmpeg_cmd(paths, k),
+                enabled=lambda paths: len(paths) == 1,
+            ))
 
     def _send_to(self, target_list, paths: list[str], message: str) -> None:
         added, dup = target_list.add_many(paths)
@@ -292,6 +440,42 @@ class ConverterMainWindow(QMainWindow):
             self.status_bar.showMessage(f"{message}（{added} 个新增，{dup} 个重复）", 4000)
         else:
             self.status_bar.showMessage(f"{message}（{added} 个）", 3000)
+
+    def _copy_ffmpeg_cmd(self, paths: list[str], kind: TaskKind) -> None:
+        if not paths:
+            return
+        src = paths[0]
+        target = format_combo_current_key(
+            self.video_handles.format_combo if kind == TaskKind.VIDEO
+            else self.audio_handles.format_combo
+        ) or "mp4"
+        out = os.path.join(self._output_path, f"OUTPUT.{target}")
+        spec = spec_for(self._quality_preset)
+        target_ext = "." + target.lower()
+        if target_ext in AUDIO_EXTS and kind == TaskKind.VIDEO:
+            cmd = build_extract_audio_cmd(src, out, spec=spec)
+        else:
+            cmd = build_convert_cmd(src, out, use_hw=self._use_hw_accel, spec=spec)
+        text = shlex.join(cmd)
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+            self.status_bar.showMessage("ffmpeg 命令已复制到剪贴板", 3000)
+
+    # ---- File info preview -------------------------------------------
+    def _on_file_selection_changed(self, current, _previous) -> None:
+        if current is None:
+            self.info_panel.clear()
+            return
+        path = current.data(Qt.UserRole)
+        if not path or not os.path.isfile(path):
+            self.info_panel.setPlainText("(文件不存在)")
+            return
+        info = probe_full(path)
+        if info:
+            self.info_panel.setPlainText(info.summary_text())
+        else:
+            self.info_panel.setPlainText("(无法读取元信息)")
 
     # ---- Settings/application glue ------------------------------------
     def _apply_settings(self) -> None:
@@ -304,6 +488,13 @@ class ConverterMainWindow(QMainWindow):
         self._output_path = s.value(SettingsKey.OUTPUT_PATH, "", type=str) or os.path.join(app_runtime_dir(), "output")
         self._use_hw_accel = s.value(SettingsKey.USE_HW_ACCEL, False, type=bool)
         self._quality_preset = parse_preset(s.value(SettingsKey.QUALITY_PRESET, "balanced", type=str))
+        self._conflict_policy = ConflictPolicy(s.value(SettingsKey.DEFAULT_CONFLICT_POLICY, "ask", type=str))
+        self._filename_template = s.value(SettingsKey.DEFAULT_FILENAME_TEMPLATE, "{base}", type=str)
+        self._mirror_subdirs = s.value(SettingsKey.DEFAULT_MIRROR_SUBDIRS, False, type=bool)
+        self._continue_on_failure = s.value(SettingsKey.DEFAULT_CONTINUE_ON_FAILURE, True, type=bool)
+        self._concurrency_mode = s.value(SettingsKey.CONCURRENCY_MODE, "auto", type=str)
+        self._notify_on_complete = s.value(SettingsKey.NOTIFY_ON_COMPLETE, True, type=bool)
+        self._open_output_on_complete = s.value(SettingsKey.OPEN_OUTPUT_ON_COMPLETE, False, type=bool)
 
         font = QFont()
         font.setPointSize(self._font_size)
@@ -315,6 +506,13 @@ class ConverterMainWindow(QMainWindow):
         self._overlay_alpha = int(self._overlay_strength / 100.0 * 255)
         self._load_background()
         self.quality_badge.setText(f"质量 · {self._quality_preset.display.split(' ·')[0]}")
+
+        burn_json = s.value(SettingsKey.CUSTOM_BURN_STYLE, "", type=str)
+        if burn_json:
+            self._burn_style = BurnStyle.from_json(burn_json)
+        else:
+            self._burn_style = BurnStyle()
+
         self.update()
 
     def _load_background(self) -> None:
@@ -337,8 +535,6 @@ class ConverterMainWindow(QMainWindow):
                 ),
             )
             painter.setOpacity(1.0)
-        # Readability overlay: quiet the background just enough for panels to
-        # read well, while still letting the image breathe.
         if self._overlay_alpha > 0:
             r, g, b = self._overlay_color
             painter.fillRect(self.rect(), QColor(r, g, b, self._overlay_alpha))
@@ -354,6 +550,75 @@ class ConverterMainWindow(QMainWindow):
 
     def _on_hw_accel_changed(self, use_hw: bool) -> None:
         self._use_hw_accel = use_hw
+
+    def _open_history(self) -> None:
+        from .history_dialog import HistoryDialog
+        dlg = HistoryDialog(self._history, self)
+        dlg.exec_()
+
+    # ---- Global drag-and-drop (auto-route by extension) ---------------
+    def dragEnterEvent(self, event):  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):  # noqa: N802
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        event.setDropAction(Qt.CopyAction)
+        event.acceptProposedAction()
+
+        audio_count, video_count, sub_count = 0, 0, 0
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            if os.path.isdir(path):
+                a, _ = self.audio_handles.file_list.add_directory(path, extensions=AUDIO_EXTS)
+                audio_count += a
+                v, _ = self.video_handles.file_list.add_directory(path, extensions=VIDEO_EXTS)
+                video_count += v
+                s, _ = self.subtitle_handles.file_list.add_directory(path, extensions=SUBTITLE_EXTS)
+                sub_count += s
+            elif is_audio_file(path):
+                if self.audio_handles.file_list.add_path(path):
+                    audio_count += 1
+            elif is_video_file(path):
+                if self.video_handles.file_list.add_path(path):
+                    video_count += 1
+            elif is_subtitle_file(path):
+                if self.subtitle_handles.file_list.add_path(path):
+                    sub_count += 1
+
+        total = audio_count + video_count + sub_count
+        if total == 0:
+            self.status_bar.showMessage("未找到支持的文件。", 3000)
+            return
+
+        parts = []
+        if audio_count:
+            parts.append(f"音频 {audio_count}")
+        if video_count:
+            parts.append(f"视频 {video_count}")
+        if sub_count:
+            parts.append(f"字幕 {sub_count}")
+        msg = f"已自动分流: {' · '.join(parts)}"
+        self.status_bar.showMessage(msg, 4000)
+
+        if video_count and not audio_count and not sub_count:
+            self.tabs.setCurrentIndex(self.TAB_VIDEO)
+        elif audio_count and not video_count and not sub_count:
+            self.tabs.setCurrentIndex(self.TAB_AUDIO)
+        elif sub_count and not audio_count and not video_count:
+            self.tabs.setCurrentIndex(self.TAB_SUBTITLE)
 
     # ---- File adding ---------------------------------------------------
     def _add_files(self, file_list, label: str, extensions: frozenset[str]) -> None:
@@ -378,29 +643,23 @@ class ConverterMainWindow(QMainWindow):
             self.status_bar.showMessage("未找到匹配的文件。", 4000)
             return
         if dup:
-            self.status_bar.showMessage(
-                f"已添加 {added} 个文件，跳过 {dup} 个重复项", 4000
-            )
+            self.status_bar.showMessage(f"已添加 {added} 个文件，跳过 {dup} 个重复项", 4000)
         else:
             self.status_bar.showMessage(f"已添加 {added} 个文件", 3000)
 
-    # ---- Persistence: remember last selections ------------------------
+    # ---- Persistence ---------------------------------------------------
     def _restore_last_selections(self) -> None:
         s = self.settings
-        key = s.value(SettingsKey.LAST_AUDIO_FORMAT, "mp3", type=str)
-        format_combo_set_key(self.audio_handles.format_combo, key)
-
-        key = s.value(SettingsKey.LAST_VIDEO_FORMAT, "mp4", type=str)
-        format_combo_set_key(self.video_handles.format_combo, key)
-
-        key = s.value(SettingsKey.LAST_SUBTITLE_FORMAT, "srt", type=str)
-        format_combo_set_key(self.subtitle_handles.format_combo, key)
-
+        format_combo_set_key(self.audio_handles.format_combo,
+                              s.value(SettingsKey.LAST_AUDIO_FORMAT, "mp3", type=str))
+        format_combo_set_key(self.video_handles.format_combo,
+                              s.value(SettingsKey.LAST_VIDEO_FORMAT, "mp4", type=str))
+        format_combo_set_key(self.subtitle_handles.format_combo,
+                              s.value(SettingsKey.LAST_SUBTITLE_FORMAT, "srt", type=str))
         mode = s.value(SettingsKey.LAST_BURN_MODE, "硬编码", type=str)
         idx = self.burn_handles.mode_combo.findText(mode)
         if idx >= 0:
             self.burn_handles.mode_combo.setCurrentIndex(idx)
-
         out_fmt = s.value(SettingsKey.LAST_BURN_OUTPUT_FORMAT, "mkv", type=str)
         idx = self.burn_handles.output_format_combo.findText(out_fmt)
         if idx >= 0:
@@ -421,7 +680,7 @@ class ConverterMainWindow(QMainWindow):
 
     # ---- Conversion dispatch ------------------------------------------
     def _start_conversion(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._coordinator.running:
             QMessageBox.information(self, "提示", "当前有任务在进行，请先等待完成或取消。")
             return
 
@@ -435,19 +694,47 @@ class ConverterMainWindow(QMainWindow):
         if not self._ensure_output_dir(task.output_dir):
             return
 
-        if task.files:
-            input_dirs = {os.path.dirname(f) for f in task.files}
-            if os.path.abspath(task.output_dir) in {os.path.abspath(d) for d in input_dirs}:
-                reply = QMessageBox.question(
-                    self, "输出目录与源目录相同",
-                    "输出目录与源文件所在目录相同，可能覆盖源文件。确认继续吗？\n"
-                    "(建议在设置里挑一个独立的输出目录。)",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-                )
-                if reply != QMessageBox.Yes:
-                    return
+        # Pre-flight estimate (batch tasks only; burn is single-shot)
+        if task.files and task.kind != TaskKind.BURN:
+            from .estimate_dialog import EstimateDialog
+            spec = spec_for(task.quality)
+            report = estimate_task(
+                task.files, task.target_format, task.output_dir, spec,
+                task.use_hw_accel,
+                is_audio_only=(task.kind == TaskKind.AUDIO),
+                filename_template=task.filename_template,
+                mirror_subdirs=task.mirror_subdirs,
+                source_root=task.source_root,
+            )
+            dlg = EstimateDialog(report, self)
+            if dlg.exec_() != QDialog.Accepted:
+                return
+            if dlg.chosen_conflict is not None:
+                task.conflict_policy = dlg.chosen_conflict
+
+        # Pre-compute the output plan so concurrent runnables don't race
+        # on conflict resolution. ASK is resolved inside plan_output_paths
+        # by degrading to RENAME, which matches the estimate-dialog choice
+        # the user already confirmed.
+        plan = None
+        if task.files and task.kind != TaskKind.BURN:
+            plan = plan_output_paths(
+                task.files,
+                target_format=task.target_format,
+                output_dir=task.output_dir,
+                policy=task.conflict_policy,
+                filename_template=task.filename_template,
+                quality_name=task.quality.value,
+                preset_name=task.preset_name,
+                mirror_subdirs=task.mirror_subdirs,
+                source_root=task.source_root,
+            )
+        self._coordinator.attach_plan(plan)
 
         self._remember_selections()
+        self._file_results.clear()
+        self._conversion_start_time = time.monotonic()
+        self._active_task = task
 
         self.log_display.clear()
         self.progress_bar.setValue(0)
@@ -456,60 +743,61 @@ class ConverterMainWindow(QMainWindow):
         self.current_file_label.setText(f"准备中 · {_tab_kind_label(index)}")
         self.eta_label.setText("")
 
-        self._worker = ConvertWorker(task, parent=self)
-        self._worker.progress_signal.connect(self.progress_bar.setValue)
-        self._worker.file_progress_signal.connect(self.file_progress.setValue)
-        self._worker.current_file_signal.connect(self._on_current_file)
-        self._worker.time_signal.connect(self.time_label.setText)
-        self._worker.eta_signal.connect(self._on_eta)
-        self._worker.log_signal.connect(self._append_log)
-        self._worker.error_signal.connect(self._on_worker_error)
-        self._worker.finished_signal.connect(self._on_worker_finished)
-        self._worker.start()
+        n = resolve_concurrency(
+            self._concurrency_mode, task.use_hw_accel,
+            task.kind == TaskKind.BURN,
+        )
+        self._coordinator.set_concurrency(n)
+        task._concurrency_mode = self._concurrency_mode
+        self._coordinator.queue.enqueue(task)
+        self._coordinator.start()
+        self.queue_panel.refresh()
 
         self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.btn_close.setEnabled(False)
-        self.status_bar.showMessage("处理中…")
+        self.queue_panel.set_running(True)
+        self.status_bar.showMessage(f"处理中… · 并发 {n} 路")
 
     def _build_task(self, index: int) -> ConvertTask:
+        common = dict(
+            conflict_policy=self._conflict_policy,
+            filename_template=self._filename_template,
+            mirror_subdirs=self._mirror_subdirs,
+            continue_on_failure=self._continue_on_failure,
+            burn_style=self._burn_style,
+        )
         if index == self.TAB_AUDIO:
             files = self.audio_handles.file_list.all_paths()
             if not files:
                 raise ValueError("请先添加音频文件。")
             return ConvertTask(
-                kind=TaskKind.AUDIO,
-                files=files,
+                kind=TaskKind.AUDIO, files=files,
                 target_format=format_combo_current_key(self.audio_handles.format_combo) or "mp3",
-                output_dir=self._output_path,
-                use_hw_accel=False,
-                quality=self._quality_preset,
+                output_dir=self._output_path, use_hw_accel=False,
+                quality=self._quality_preset, **common,
             )
         if index == self.TAB_VIDEO:
             files = self.video_handles.file_list.all_paths()
             if not files:
                 raise ValueError("请先添加视频文件。")
-            target = format_combo_current_key(self.video_handles.format_combo) or "mp4"
             return ConvertTask(
-                kind=TaskKind.VIDEO,
-                files=files,
-                target_format=target,
+                kind=TaskKind.VIDEO, files=files,
+                target_format=format_combo_current_key(self.video_handles.format_combo) or "mp4",
                 output_dir=self._output_path,
                 merge_av=self.video_handles.check_merge.isChecked(),
                 use_hw_accel=self._use_hw_accel,
-                quality=self._quality_preset,
+                quality=self._quality_preset, **common,
             )
         if index == self.TAB_SUBTITLE:
             files = self.subtitle_handles.file_list.all_paths()
             if not files:
                 raise ValueError("请先添加字幕文件。")
             return ConvertTask(
-                kind=TaskKind.SUBTITLE,
-                files=files,
+                kind=TaskKind.SUBTITLE, files=files,
                 target_format=format_combo_current_key(self.subtitle_handles.format_combo) or "srt",
-                output_dir=self._output_path,
-                use_hw_accel=False,
-                quality=self._quality_preset,
+                output_dir=self._output_path, use_hw_accel=False,
+                quality=self._quality_preset, **common,
             )
         if index == self.TAB_BURN:
             videos = self.burn_handles.video_list.all_paths()
@@ -520,23 +808,16 @@ class ConverterMainWindow(QMainWindow):
             hardcode = mode == "硬编码"
             out_fmt = self.burn_handles.output_format_combo.currentText() if not hardcode else "mp4"
             if videos[0].lower().endswith(".ts") and not hardcode:
-                QMessageBox.information(
-                    self, "提示",
-                    "TS 格式不支持软封装字幕，已自动切换为硬编码模式。",
-                )
+                QMessageBox.information(self, "提示", "TS 格式不支持软封装字幕，已自动切换为硬编码模式。")
                 hardcode = True
             return ConvertTask(
-                kind=TaskKind.BURN,
-                files=[],
-                output_dir=self._output_path,
-                use_hw_accel=self._use_hw_accel,
+                kind=TaskKind.BURN, files=[],
+                output_dir=self._output_path, use_hw_accel=self._use_hw_accel,
                 quality=self._quality_preset,
                 burn=BurnOptions(
-                    video_path=videos[0],
-                    subtitle_path=subs[0],
-                    hardcode=hardcode,
-                    output_format=out_fmt,
-                ),
+                    video_path=videos[0], subtitle_path=subs[0],
+                    hardcode=hardcode, output_format=out_fmt,
+                ), **common,
             )
         raise ValueError("未知的 Tab。")
 
@@ -552,7 +833,7 @@ class ConverterMainWindow(QMainWindow):
             return False
 
     def _cancel_conversion(self) -> None:
-        if self._worker is None or not self._worker.isRunning():
+        if not self._coordinator.running:
             self.status_bar.showMessage("当前无任务。", 3000)
             return
         reply = QMessageBox.question(
@@ -561,9 +842,10 @@ class ConverterMainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
-            self._worker.request_cancel()
-            self.status_bar.showMessage("已请求取消，正在等待子进程退出…")
+            self._coordinator.cancel_all()
+            self.status_bar.showMessage("已请求取消…")
             self._append_log("[系统] 已请求取消任务…")
+            self._reset_ui_state()
 
     def _open_output_dir(self) -> None:
         path = self._output_path
@@ -583,7 +865,24 @@ class ConverterMainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, "打开失败", str(exc))
 
-    # ---- Worker signal handlers ---------------------------------------
+    def _export_log(self) -> None:
+        text = self.log_display.toPlainText()
+        if not text.strip():
+            self.status_bar.showMessage("日志为空，无需导出。", 3000)
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出日志", "convert_log.txt",
+            "文本文件 (*.txt);;所有文件 (*)",
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                self.status_bar.showMessage(f"日志已导出到 {path}", 4000)
+            except OSError as exc:
+                QMessageBox.warning(self, "导出失败", str(exc))
+
+    # ---- Coordinator signal handlers ----------------------------------
     def _append_log(self, text: str) -> None:
         if not text:
             return
@@ -591,23 +890,119 @@ class ConverterMainWindow(QMainWindow):
         sb = self.log_display.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _on_worker_error(self, msg: str) -> None:
+    def _on_coordinator_error(self, msg: str) -> None:
         self._append_log(f"[错误] {msg}")
-        QMessageBox.critical(self, "错误", msg)
 
-    def _on_worker_finished(self, success: bool) -> None:
+    def _on_file_done(self, result: FileResult) -> None:
+        self._file_results.append(result)
+
+    def _on_execution_event(self, event: ExecutionEvent) -> None:
+        """Single entry point for cross-cutting concerns (history / notify).
+
+        This keeps ``_on_all_done`` focused on UI, and gives future
+        subscribers (telemetry, sound, etc.) a stable place to hook into.
+        """
+        if event.type == EventType.SOFT_STOP.value:
+            # Don't let a soft-stop banner get lost in the log scroll.
+            self.status_bar.showMessage(event.message or "已停止派发", 5000)
+
+    def _on_all_done(self, results: list[FileResult]) -> None:
+        self._reset_ui_state()
+        elapsed = time.monotonic() - self._conversion_start_time
+
+        success = [r for r in results if r.status == FileStatus.SUCCESS]
+        failed = [r for r in results if r.status == FileStatus.FAILED]
+        skipped = [r for r in results if r.status in (FileStatus.SKIPPED, FileStatus.CANCELLED)]
+
+        if success and not failed:
+            self.status_bar.showMessage("任务完成", 5000)
+            self.current_file_label.setText("已完成")
+            self._append_log(f"[完成] 全部 {len(success)} 个文件处理成功。")
+        elif failed:
+            self.status_bar.showMessage(f"任务完成，{len(failed)} 个失败", 5000)
+            self.current_file_label.setText(f"完成 · {len(failed)} 个失败")
+        else:
+            self.status_bar.showMessage("任务结束", 5000)
+            self.current_file_label.setText("已结束")
+
+        # History uses the cached reference — cancel_all() clears the queue,
+        # so ``coordinator.queue.all_tasks[-1]`` may be gone by now.
+        task = self._active_task
+        if results or task is not None:
+            self._history.add(HistoryRecord(
+                task_kind=task.kind.value if task else "",
+                file_count=len(results),
+                duration_s=elapsed,
+                success_count=len(success),
+                fail_count=len(failed),
+                skip_count=len(skipped),
+                target_format=task.target_format if task else "",
+                preset_name=task.preset_name if task else "",
+                output_dir=task.output_dir if task else "",
+            ))
+        self._active_task = None
+
+        if self._notify_on_complete and results:
+            body = f"成功 {len(success)} · 失败 {len(failed)} · 跳过 {len(skipped)}"
+            send_notification("盐酸转换器 · 完成", body)
+
+        if self._open_output_on_complete and success:
+            self._open_output_dir()
+
+        if results:
+            from .result_panel import ResultPanel
+            panel = ResultPanel(results, self)
+            panel.retry_requested = self._retry_failed_files
+            panel.exec_()
+
+        self.queue_panel.refresh()
+
+    def _retry_failed_files(self, paths: list[str]) -> None:
+        if not paths:
+            return
+        # Prefer the most-recent *active* task (survives cancellation) and
+        # fall back to the queue history only as a last resort.
+        source_task = self._active_task or (
+            self._coordinator.queue.all_tasks[-1]
+            if self._coordinator.queue.all_tasks else None
+        )
+        if source_task is None:
+            self.status_bar.showMessage("没有可用的原始任务参数用于重试。", 4000)
+            return
+
+        retry = ConvertTask(
+            kind=source_task.kind,
+            files=paths,
+            target_format=source_task.target_format,
+            output_dir=source_task.output_dir,
+            merge_av=False,
+            use_hw_accel=source_task.use_hw_accel,
+            quality=source_task.quality,
+            conflict_policy=ConflictPolicy.OVERWRITE,
+            filename_template=source_task.filename_template,
+            mirror_subdirs=source_task.mirror_subdirs,
+            continue_on_failure=source_task.continue_on_failure,
+            burn_style=source_task.burn_style,
+            preset_name=source_task.preset_name,
+        )
+        self._active_task = retry
+        self._conversion_start_time = time.monotonic()
+        self._file_results.clear()
+        self._coordinator.attach_plan(None)  # retry rebuilds via runtime reservation
+        self._coordinator.queue.enqueue(retry)
+        self._coordinator.start()
+        self.queue_panel.refresh()
+        self.btn_start.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.queue_panel.set_running(True)
+        self.status_bar.showMessage("重试失败项中…")
+
+    def _reset_ui_state(self) -> None:
         self.btn_start.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.btn_close.setEnabled(True)
-        self._worker = None
+        self.queue_panel.set_running(False)
         self.eta_label.setText("")
-        if success:
-            self.status_bar.showMessage("任务完成", 5000)
-            self.current_file_label.setText("已完成")
-            self._append_log("[完成] 任务已结束。")
-        else:
-            self.status_bar.showMessage("任务未正常完成", 5000)
-            self.current_file_label.setText("未完成")
 
     def _on_current_file(self, index: int, total: int, filename: str) -> None:
         if total > 1:
@@ -636,15 +1031,14 @@ class ConverterMainWindow(QMainWindow):
 
     # ---- Close guard --------------------------------------------------
     def closeEvent(self, event):  # noqa: N802
-        if self._worker is not None and self._worker.isRunning():
+        if self._coordinator.running:
             reply = QMessageBox.question(
                 self, "确认退出",
                 "当前有任务进行中，是否先取消再退出？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
-                self._worker.request_cancel()
-                self._worker.wait(5000)
+                self._coordinator.cancel_all()
                 self._remember_selections()
                 event.accept()
             else:

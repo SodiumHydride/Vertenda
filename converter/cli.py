@@ -185,7 +185,13 @@ def cmd_convert(args: argparse.Namespace) -> int:
         cmd = build_extract_audio_cmd(src, out, spec=spec)
         label = f"提取音频 · {target}"
     else:
-        cmd = build_convert_cmd(src, out, use_hw=args.hw_accel, spec=spec)
+        cmd = build_convert_cmd(
+            src, out, use_hw=args.hw_accel, spec=spec,
+            trim_start=getattr(args, "trim_start", None),
+            trim_end=getattr(args, "trim_end", None),
+            scale_preset=getattr(args, "scale", None),
+            volume_normalize=getattr(args, "normalize", False),
+        )
         label = f"转换 · {target}"
 
     return _run_media(cmd, label, duration=get_media_duration(src) or 1.0)
@@ -394,6 +400,21 @@ def _add_shared_runtime_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("-q", "--quality", default="balanced",
                    choices=[qp.value for qp in QualityPreset],
                    help="转换质量预设 (默认 balanced)")
+    p.add_argument("--conflict", default="overwrite",
+                   choices=["skip", "overwrite", "rename"],
+                   help="冲突策略: skip/overwrite/rename (默认 overwrite)")
+    p.add_argument("--filename-template", default="{base}",
+                   help="输出文件名模板 (默认 {base})")
+    p.add_argument("--concurrency", default="auto",
+                   help="并发路数: auto 或 1-8 (默认 auto)")
+    p.add_argument("--scale", default=None,
+                   help="缩放: 1080p/720p/480p/WxH")
+    p.add_argument("--normalize", action="store_true",
+                   help="音量归一化 (loudnorm EBU R128)")
+    p.add_argument("--trim-start", type=float, default=None,
+                   help="裁剪起始时间 (秒)")
+    p.add_argument("--trim-end", type=float, default=None,
+                   help="裁剪结束时间 (秒)")
 
 
 def _version_string() -> str:

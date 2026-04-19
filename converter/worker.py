@@ -30,6 +30,7 @@ from .ffmpeg.commands import (
 from .ffmpeg.probe import get_media_duration
 from .ffmpeg.quality import QualityPreset, QualitySpec, spec_for
 from .ffmpeg.runner import CancelToken, run_blocking, run_with_progress
+from .fs import ConflictPolicy
 from .subtitle.converters import (
     SubtitleConversionError,
     lrc_to_srt,
@@ -38,6 +39,7 @@ from .subtitle.converters import (
     vtt_to_lrc,
 )
 from .subtitle.styling import inject_burn_style
+from .subtitle.styling_config import BurnStyle
 
 
 class TaskKind(str, Enum):
@@ -65,6 +67,25 @@ class ConvertTask:
     use_hw_accel: bool = False
     quality: QualityPreset = QualityPreset.BALANCED
     burn: Optional[BurnOptions] = None
+    # ---- Phase 0+ additions ----
+    conflict_policy: ConflictPolicy = ConflictPolicy.ASK
+    filename_template: str = "{base}"
+    mirror_subdirs: bool = False
+    continue_on_failure: bool = True
+    source_root: str = ""
+    preset_name: str = ""
+    # How many concurrent runnables to use ("auto" or "1".."8").
+    # Read by TaskCoordinator._dispatch_batch via getattr(), so older
+    # callers that don't set it still work.
+    _concurrency_mode: str = "auto"
+    # Filters (Phase 2)
+    trim_start: Optional[float] = None
+    trim_end: Optional[float] = None
+    scale_preset: Optional[str] = None
+    volume_normalize: bool = False
+    two_pass: bool = False
+    burn_style: Optional[BurnStyle] = None
+    subtitle_shift_s: float = 0.0
 
 
 def _format_eta(seconds: float) -> str:

@@ -50,15 +50,28 @@ class SettingsKey:
     USE_HW_ACCEL = "use_hw_accel"
     QUALITY_PRESET = "quality_preset"   # "fast" / "balanced" / "high"
     OVERLAY_STRENGTH = "overlay_strength"  # 0..100: readability overlay opacity
-    # Custom data directory for auto-downloaded ffmpeg (Windows C-drive relief).
-    # Empty string = use the platform default under AppData / Library / .local/share.
     CUSTOM_DATA_DIR = "custom_data_dir"
-    # Last-used selections per tab, so reopening the app feels familiar.
+    # Last-used selections per tab.
     LAST_AUDIO_FORMAT = "last_audio_format"
     LAST_VIDEO_FORMAT = "last_video_format"
     LAST_SUBTITLE_FORMAT = "last_subtitle_format"
     LAST_BURN_MODE = "last_burn_mode"
     LAST_BURN_OUTPUT_FORMAT = "last_burn_output_format"
+    # ---- Phase 0+ additions ----
+    DEFAULT_CONFLICT_POLICY = "default_conflict_policy"       # "skip"/"overwrite"/"rename"/"ask"
+    DEFAULT_FILENAME_TEMPLATE = "default_filename_template"   # "{base}" etc.
+    DEFAULT_MIRROR_SUBDIRS = "default_mirror_subdirs"
+    DEFAULT_CONTINUE_ON_FAILURE = "default_continue_on_failure"
+    CONCURRENCY_MODE = "concurrency_mode"                     # "auto" / "1" .. "8"
+    NOTIFY_ON_COMPLETE = "notify_on_complete"
+    SOUND_ON_COMPLETE = "sound_on_complete"
+    OPEN_OUTPUT_ON_COMPLETE = "open_output_on_complete"
+    TASK_HISTORY = "task_history"                              # JSON
+    CUSTOM_BURN_STYLE = "custom_burn_style"                   # JSON
+    LAST_AUDIO_PRESET = "last_audio_preset"
+    LAST_VIDEO_PRESET = "last_video_preset"
+    LAST_SUBTITLE_PRESET = "last_subtitle_preset"
+    LAST_BURN_PRESET = "last_burn_preset"
 
 
 # Video-to-audio extraction pseudo-format, selectable on the video tab so

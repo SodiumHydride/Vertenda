@@ -1,2 +1,4 @@
 PyQt5>=5.15,<6
+psutil>=5.9
 pytest>=7.0
+winotify>=1.1; platform_system=="Windows"

@@ -175,7 +175,33 @@ class SettingsDialog(QDialog):
             self.quality_combo.addItem(preset.display, userData=preset.value)
         form.addRow("转换质量:", self.quality_combo)
 
-        # Windows-only: right-click context menu integration.
+        self.conflict_combo = QComboBox()
+        self.conflict_combo.addItems(["ask", "skip", "overwrite", "rename"])
+        self.conflict_combo.setToolTip("ask=开始前弹窗 skip=跳过 overwrite=覆盖 rename=加后缀")
+        form.addRow("冲突策略:", self.conflict_combo)
+
+        self.filename_edit = QLineEdit()
+        self.filename_edit.setPlaceholderText("{base}")
+        self.filename_edit.setToolTip("{base} {ext} {target} {quality} {preset} {date} {datetime} {count} {parent}")
+        form.addRow("文件名模板:", self.filename_edit)
+
+        self.check_mirror = QCheckBox("保留源目录结构")
+        form.addRow("子目录镜像:", self.check_mirror)
+
+        self.check_continue = QCheckBox("批量中某文件失败时继续处理剩余文件")
+        form.addRow("失败策略:", self.check_continue)
+
+        self.concurrency_combo = QComboBox()
+        self.concurrency_combo.addItems(["auto", "1", "2", "3", "4", "5", "6", "7", "8"])
+        self.concurrency_combo.setToolTip("auto=自动检测, 1-8=手动指定并发路数")
+        form.addRow("并发路数:", self.concurrency_combo)
+
+        self.check_notify = QCheckBox("任务完成后系统通知")
+        form.addRow("桌面通知:", self.check_notify)
+
+        self.check_open_output = QCheckBox("任务完成后自动打开输出目录")
+        form.addRow("完成动作:", self.check_open_output)
+
         if win_registry is not None:
             self.check_ctx_menu = QCheckBox("右键文件 → “转换 (Kurisu)” 子菜单")
             self.check_ctx_menu.setToolTip(
@@ -297,6 +323,20 @@ class SettingsDialog(QDialog):
         idx = self.quality_combo.findData(preset.value)
         self.quality_combo.setCurrentIndex(max(0, idx))
         self.data_dir_edit.setText(s.value(SettingsKey.CUSTOM_DATA_DIR, "", type=str))
+
+        conflict = s.value(SettingsKey.DEFAULT_CONFLICT_POLICY, "ask", type=str)
+        idx = self.conflict_combo.findText(conflict)
+        if idx >= 0:
+            self.conflict_combo.setCurrentIndex(idx)
+        self.filename_edit.setText(s.value(SettingsKey.DEFAULT_FILENAME_TEMPLATE, "{base}", type=str))
+        self.check_mirror.setChecked(s.value(SettingsKey.DEFAULT_MIRROR_SUBDIRS, False, type=bool))
+        self.check_continue.setChecked(s.value(SettingsKey.DEFAULT_CONTINUE_ON_FAILURE, True, type=bool))
+        conc = s.value(SettingsKey.CONCURRENCY_MODE, "auto", type=str)
+        idx = self.concurrency_combo.findText(conc)
+        if idx >= 0:
+            self.concurrency_combo.setCurrentIndex(idx)
+        self.check_notify.setChecked(s.value(SettingsKey.NOTIFY_ON_COMPLETE, True, type=bool))
+        self.check_open_output.setChecked(s.value(SettingsKey.OPEN_OUTPUT_ON_COMPLETE, False, type=bool))
 
         if self.check_ctx_menu is not None and win_registry is not None:
             currently = win_registry.is_registered()
@@ -428,6 +468,14 @@ class SettingsDialog(QDialog):
         constants.FFMPEG_PATH, constants.FFPROBE_PATH = constants.resolve_ffmpeg_paths()
         if new_data_dir != old_data_dir:
             self.data_dir_changed_signal.emit()
+
+        s.setValue(SettingsKey.DEFAULT_CONFLICT_POLICY, self.conflict_combo.currentText())
+        s.setValue(SettingsKey.DEFAULT_FILENAME_TEMPLATE, self.filename_edit.text().strip() or "{base}")
+        s.setValue(SettingsKey.DEFAULT_MIRROR_SUBDIRS, self.check_mirror.isChecked())
+        s.setValue(SettingsKey.DEFAULT_CONTINUE_ON_FAILURE, self.check_continue.isChecked())
+        s.setValue(SettingsKey.CONCURRENCY_MODE, self.concurrency_combo.currentText())
+        s.setValue(SettingsKey.NOTIFY_ON_COMPLETE, self.check_notify.isChecked())
+        s.setValue(SettingsKey.OPEN_OUTPUT_ON_COMPLETE, self.check_open_output.isChecked())
 
         self.hw_accel_changed_signal.emit(self.check_hw.isChecked())
 

@@ -1,9 +1,34 @@
 # -*- coding: utf-8 -*-
 """FFmpeg subprocess runner with proper cancellation semantics.
 
-Unlike the original implementation, `CancelToken.cancel()` actively terminates
-the child process instead of merely setting a flag that the readline loop
-happens to check.
+CancelToken state machine
+-------------------------
+
+Every ``SingleFileRunnable`` holds its own token.  The token coordinates four
+independent concerns so the coordinator can reason about them without racing:
+
+  * a subprocess.Popen handle (``_proc``) that may or may not be attached
+  * a pause/resume latch used by the reader loop and the runnable gate
+  * a cancel event that short-circuits the reader loop
+  * an explicit state enum used for observability / debugging
+
+Transition table::
+
+    ┌──────────┐ pause()     ┌────────┐ resume()   ┌──────────┐
+    │ RUNNING  ├────────────▶│ PAUSED ├───────────▶│ RUNNING  │
+    └────┬─────┘             └────┬───┘             └─────┬────┘
+         │ cancel()               │ cancel()              │ cancel()
+         ▼                        ▼                       ▼
+    ┌──────────┐ wait(timeout) ┌───────────┐
+    │CANCELLING├──────────────▶│ CANCELLED │
+    └──────────┘               └───────────┘
+                (and independently, natural exit → FINISHED)
+
+Observed guarantees:
+  * ``cancel()`` unblocks any pause latch so the runnable doesn't deadlock.
+  * A cancel arriving before ``attach`` is remembered; the next ``attach``
+    immediately terminates the new process.
+  * ``pause()`` while CANCELLING/CANCELLED/FINISHED is a no-op.
 """
 
 from __future__ import annotations
@@ -13,7 +38,14 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, Optional
+
+try:
+    import psutil  # noqa: F401  -- used lazily in _suspend/_resume
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
 
 
 _TIME_PATTERN = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
@@ -33,39 +65,135 @@ class RunResult:
     cancelled: bool = False
 
 
+class TokenState(str, Enum):
+    RUNNING = "running"
+    PAUSED = "paused"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    FINISHED = "finished"
+
+
+_TERMINAL_STATES = frozenset({
+    TokenState.CANCELLING, TokenState.CANCELLED, TokenState.FINISHED,
+})
+
+
 class CancelToken:
-    """Thread-safe cancel signal that can forcibly terminate an attached process."""
+    """Thread-safe cancel/pause signal bound to (at most) one subprocess."""
 
     def __init__(self) -> None:
-        self._event = threading.Event()
+        self._cancel_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # not paused initially
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
+        self._state: TokenState = TokenState.RUNNING
+
+    # ---- lifecycle hooks called by run_with_progress -----------------
 
     def attach(self, proc: subprocess.Popen) -> None:
+        """Bind a newly-started subprocess. If cancel arrived first, kill now."""
         with self._lock:
             self._proc = proc
+            cancel_pending = self._cancel_event.is_set()
+        if cancel_pending:
+            self._terminate_proc(proc)
+            with self._lock:
+                self._state = TokenState.CANCELLED
 
     def detach(self) -> None:
+        """Release the subprocess reference once it has exited."""
         with self._lock:
             self._proc = None
+            if self._cancel_event.is_set():
+                self._state = TokenState.CANCELLED
+            elif self._state not in _TERMINAL_STATES:
+                self._state = TokenState.FINISHED
+            self._pause_event.set()
+
+    # ---- observable properties ---------------------------------------
 
     @property
     def cancelled(self) -> bool:
-        return self._event.is_set()
+        return self._cancel_event.is_set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._pause_event.is_set()
+
+    @property
+    def state(self) -> TokenState:
+        with self._lock:
+            return self._state
+
+    # ---- control surface ---------------------------------------------
 
     def cancel(self) -> None:
-        self._event.set()
+        """Terminate the attached process (if any) and flip to CANCELLED.
+
+        If no process is attached yet, we go straight to CANCELLED — there's
+        nothing to tear down. A subsequent ``attach()`` will still kill the
+        newly-started process because ``_cancel_event`` is set.
+        """
+        self._cancel_event.set()
+        self._pause_event.set()  # unblock any pause latch
         with self._lock:
+            if self._state == TokenState.FINISHED:
+                return
+            self._state = TokenState.CANCELLING
             proc = self._proc
         if proc is None:
+            with self._lock:
+                self._state = TokenState.CANCELLED
             return
+        self._terminate_proc(proc)
+        with self._lock:
+            self._state = TokenState.CANCELLED
+
+    def pause(self) -> None:
+        """Suspend the attached ffmpeg (best-effort, needs psutil).
+
+        No-op if the token is already cancelling/cancelled/finished —
+        otherwise we'd accidentally wake a runnable that's mid-teardown.
+        """
+        with self._lock:
+            if self._state in _TERMINAL_STATES:
+                return
+            if self._cancel_event.is_set():
+                return
+            self._state = TokenState.PAUSED
+            proc = self._proc
+        self._pause_event.clear()
+        if proc is not None and proc.poll() is None:
+            self._suspend_proc(proc)
+
+    def resume(self) -> None:
+        """Wake the runnable and resume the ffmpeg process."""
+        with self._lock:
+            if self._state in _TERMINAL_STATES:
+                self._pause_event.set()
+                return
+            proc = self._proc
+            if self._state == TokenState.PAUSED:
+                self._state = TokenState.RUNNING
+        if proc is not None and proc.poll() is None:
+            self._resume_proc(proc)
+        self._pause_event.set()
+
+    def wait_if_paused(self) -> None:
+        """Block until no longer paused (or cancelled)."""
+        self._pause_event.wait()
+
+    # ---- helpers -----------------------------------------------------
+
+    @staticmethod
+    def _terminate_proc(proc: subprocess.Popen) -> None:
         if proc.poll() is not None:
             return
         try:
             proc.terminate()
         except OSError:
             return
-        # Give ffmpeg ~2s to flush output and exit cleanly; escalate if it won't.
         try:
             proc.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
@@ -73,6 +201,27 @@ class CancelToken:
                 proc.kill()
             except OSError:
                 pass
+
+    @staticmethod
+    def _suspend_proc(proc: subprocess.Popen) -> None:
+        if not _HAS_PSUTIL:
+            return
+        try:
+            import psutil
+            psutil.Process(proc.pid).suspend()
+        except Exception:
+            # psutil failures are non-fatal; pause just degrades to no-op.
+            pass
+
+    @staticmethod
+    def _resume_proc(proc: subprocess.Popen) -> None:
+        if not _HAS_PSUTIL:
+            return
+        try:
+            import psutil
+            psutil.Process(proc.pid).resume()
+        except Exception:
+            pass
 
 
 def run_with_progress(
@@ -87,9 +236,9 @@ def run_with_progress(
 ) -> RunResult:
     """Execute ffmpeg and stream progress via callbacks.
 
-    - `on_progress(int)` is called with a 0..100 percentage.
-    - `on_time(str)` is called with a 'HH:MM:SS' current position.
-    - `on_log(str)` is called with raw ffmpeg stderr lines.
+    - ``on_progress(int)`` is called with a 0..100 percentage.
+    - ``on_time(str)`` is called with a 'HH:MM:SS' current position.
+    - ``on_log(str)`` is called with raw ffmpeg stderr lines.
 
     The callbacks are invoked from the reader thread; consumers are
     responsible for thread-safe UI marshalling (e.g. Qt signals).

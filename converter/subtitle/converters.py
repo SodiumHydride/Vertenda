@@ -61,3 +61,13 @@ def vtt_to_lrc(src: str, dst: str) -> None:
     cues = parse_vtt(src)
     _require_cues(cues, src)
     write_lrc(cues, dst)
+
+
+def shift_cues(cues: list[Cue], offset_s: float) -> list[Cue]:
+    """Shift all cue timestamps by *offset_s* seconds (positive = later)."""
+    shifted = []
+    for cue in cues:
+        new_start = max(0.0, cue.start + offset_s)
+        new_end = max(new_start, cue.end + offset_s)
+        shifted.append(Cue(start=new_start, end=new_end, text=cue.text))
+    return shifted
