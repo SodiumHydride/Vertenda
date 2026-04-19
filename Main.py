@@ -33,10 +33,28 @@ if sys.platform == "win32":
     subprocess.Popen = _popen_no_window  # type: ignore[assignment]
 
 
-from PyQt5.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QDialog  # noqa: E402
 
+from converter import constants  # noqa: E402
 from converter.ffmpeg.probe import check_ffmpeg_available  # noqa: E402
 from converter.ui.main_window import ConverterMainWindow  # noqa: E402
+
+
+def _ensure_ffmpeg(app: QApplication) -> bool:
+    """Make sure a runnable ffmpeg+ffprobe exist. Show the first-run dialog if not."""
+    if check_ffmpeg_available():
+        return True
+
+    # Imported lazily so the helper module does not import Qt at test time.
+    from converter.ui.first_run_dialog import FirstRunDialog
+
+    dlg = FirstRunDialog()
+    dlg.exec_()
+    if not dlg.succeeded:
+        return False
+
+    constants.FFMPEG_PATH, constants.FFPROBE_PATH = constants.resolve_ffmpeg_paths()
+    return check_ffmpeg_available()
 
 
 def main() -> int:
@@ -44,12 +62,7 @@ def main() -> int:
     app.setApplicationName("Convert")
     app.setOrganizationName("Kurisu")
 
-    if not check_ffmpeg_available():
-        QMessageBox.critical(
-            None, "FFmpeg 错误",
-            "未找到可用的 FFmpeg 可执行文件。\n"
-            "请确认 resources/ffmpeg 存在，或将 ffmpeg 添加到 PATH。",
-        )
+    if not _ensure_ffmpeg(app):
         return 1
 
     window = ConverterMainWindow()

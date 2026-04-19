@@ -59,6 +59,12 @@ QWidget {
 
 QMainWindow { background-color: transparent; }
 
+QDialog {
+    background-color: %(bg_panel)s;
+    border: 1px solid %(border)s;
+    border-radius: 10px;
+}
+
 QLabel { background: transparent; color: %(fg)s; }
 QLabel#HintLabel, QLabel#StatusLabel {
     color: %(fg_dim)s;

@@ -5,10 +5,11 @@ __pycache__/
 *.pyd
 *.so
 
-# Virtual environments
+# Virtual environments (both original patterns and the ones our build scripts create)
 .venv/
 venv/
 env/
+.venv-build/
 
 # Build / packaging outputs
 build/
@@ -21,12 +22,27 @@ dist/
 *.pkg
 *.exe
 
+# ffmpeg / ffprobe binaries - too large for git, platform-specific, and often
+# carry implicit dynamic library dependencies. Use scripts/build_*.{sh,bat}
+# with --download-ffmpeg to fetch the right binary for the current platform.
+resources/ffmpeg
+resources/ffmpeg.exe
+resources/ffprobe
+resources/ffprobe.exe
+
 # Project runtime output
 output/
 download_history.json
 
 # Local config (machine/user specific)
 converter_config.ini
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
 
 # macOS / editor noise
 .DS_Store

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import os
 
-from ..constants import FFMPEG_PATH, is_video_file
+from .. import constants
+from ..constants import is_video_file
 from .profiles import (
     DEFAULT_SPEC,
     audio_profiles,
@@ -27,7 +28,7 @@ def build_convert_cmd(input_path: str, output_path: str, use_hw: bool = False,
     """Build the ffmpeg command for a single-file audio/video conversion."""
     out_ext = os.path.splitext(output_path)[1].lower()
 
-    cmd: list[str] = [FFMPEG_PATH, "-y", *hw_accel_input_args(use_hw), "-i", input_path]
+    cmd: list[str] = [constants.FFMPEG_PATH, "-y", *hw_accel_input_args(use_hw), "-i", input_path]
 
     if is_video_file(output_path):
         cmd += [
@@ -52,7 +53,7 @@ def build_extract_audio_cmd(input_path: str, output_path: str,
                              spec: QualitySpec = DEFAULT_SPEC) -> list[str]:
     """Strip a video down to just its audio track, in the output's format."""
     out_ext = os.path.splitext(output_path)[1].lower()
-    cmd: list[str] = [FFMPEG_PATH, "-y", "-i", input_path]
+    cmd: list[str] = [constants.FFMPEG_PATH, "-y", "-i", input_path]
     cmd += ["-vn", "-sn", "-dn", "-map_metadata", "-1"]
     profile = audio_profiles(spec).get(out_ext)
     cmd += profile.as_list() if profile is not None else ["-c:a", "copy"]
@@ -63,7 +64,7 @@ def build_extract_audio_cmd(input_path: str, output_path: str,
 def build_merge_av_cmd(audio_path: str, video_path: str, output_path: str,
                         use_hw: bool = False, spec: QualitySpec = DEFAULT_SPEC) -> list[str]:
     """Build a mux command that pairs audio from one file and video from another."""
-    cmd: list[str] = [FFMPEG_PATH, "-y", *hw_accel_input_args(use_hw)]
+    cmd: list[str] = [constants.FFMPEG_PATH, "-y", *hw_accel_input_args(use_hw)]
     cmd += ["-i", video_path, "-i", audio_path]
 
     if use_hw:
@@ -112,7 +113,7 @@ def build_burn_subtitle_cmd(video_path: str, styled_sub_path: str, output_path: 
         safe_style = _escape_filter_value(force_style)
         vf = f"subtitles={safe_path}:force_style={safe_style}"
         cmd: list[str] = [
-            FFMPEG_PATH, "-y",
+            constants.FFMPEG_PATH, "-y",
             *hw_accel_input_args(use_hw),
             "-i", video_path,
             "-vf", vf,
@@ -122,7 +123,7 @@ def build_burn_subtitle_cmd(video_path: str, styled_sub_path: str, output_path: 
         ]
     else:
         cmd = [
-            FFMPEG_PATH, "-y",
+            constants.FFMPEG_PATH, "-y",
             "-i", video_path,
             "-i", styled_sub_path,
             "-map", "0", "-map", "1",
@@ -136,4 +137,4 @@ def build_burn_subtitle_cmd(video_path: str, styled_sub_path: str, output_path: 
 
 def build_subtitle_transcode_cmd(input_path: str, output_path: str) -> list[str]:
     """Simple ffmpeg subtitle transcode (srt/vtt/ass/ssa interchange)."""
-    return [FFMPEG_PATH, "-y", "-i", input_path, output_path]
+    return [constants.FFMPEG_PATH, "-y", "-i", input_path, output_path]

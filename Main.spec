@@ -3,20 +3,49 @@
 
 Uses SPECPATH (set by PyInstaller) to stay path-portable: the spec works no
 matter where the repo lives on disk, as long as it is run from inside it.
+
+Cross-platform ffmpeg handling: the repo may accumulate both a macOS
+``ffmpeg`` binary and a Windows ``ffmpeg.exe`` (e.g. after using the
+``--download-ffmpeg`` option of both build scripts). The data-collection
+function below strips out the wrong-platform binary so the resulting bundle
+is neither bloated nor confused at runtime.
 """
 
 import os
+import sys
 
 
 SPEC_ROOT = os.path.abspath(SPECPATH)
 ICON_PATH = os.path.join(SPEC_ROOT, "resources", "icon.icns")
+
+_OTHER_PLATFORM_BINARIES = (
+    {"ffmpeg", "ffprobe"} if sys.platform == "win32"
+    else {"ffmpeg.exe", "ffprobe.exe"}
+)
+
+
+def collect_resources():
+    """Walk resources/ and build PyInstaller (src, dst_dir) pairs."""
+    src_root = os.path.join(SPEC_ROOT, "resources")
+    pairs = []
+    for dirpath, _dirs, files in os.walk(src_root):
+        for fname in files:
+            if fname in _OTHER_PLATFORM_BINARIES:
+                continue
+            if fname == ".DS_Store":
+                continue
+            src = os.path.join(dirpath, fname)
+            rel_dir = os.path.relpath(dirpath, src_root)
+            dst_dir = "resources" if rel_dir == "." else os.path.join("resources", rel_dir)
+            pairs.append((src, dst_dir))
+    return pairs
 
 
 a = Analysis(
     ['Main.py'],
     pathex=[SPEC_ROOT],
     binaries=[],
-    datas=[('resources', 'resources')],
+    datas=collect_resources(),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

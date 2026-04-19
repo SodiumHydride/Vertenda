@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from ..constants import FFMPEG_PATH
+from .. import constants
 
 
 _STYLE_BLOCK: str = (
@@ -48,7 +48,7 @@ class StyledSubtitle:
 
 def _convert_to_ass(src: str, dst: str) -> None:
     """Run ffmpeg to transcode any subtitle format into ASS."""
-    cmd = [FFMPEG_PATH, "-y", "-i", src, dst]
+    cmd = [constants.FFMPEG_PATH, "-y", "-i", src, dst]
     cp = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="ignore",

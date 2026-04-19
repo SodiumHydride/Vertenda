@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import subprocess
 
-from ..constants import FFPROBE_PATH
+from .. import constants
 
 
 def get_media_duration(path: str) -> float | None:
     """Return duration in seconds, or None if ffprobe can't determine it."""
     cmd = [
-        FFPROBE_PATH,
+        constants.FFPROBE_PATH,
         "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
@@ -32,11 +32,10 @@ def get_media_duration(path: str) -> float | None:
 
 
 def check_ffmpeg_available() -> bool:
-    """Quick smoke test to verify our bundled ffmpeg is usable."""
-    from ..constants import FFMPEG_PATH
+    """Quick smoke test to verify the currently resolved ffmpeg is usable."""
     try:
         cp = subprocess.run(
-            [FFMPEG_PATH, "-version"],
+            [constants.FFMPEG_PATH, "-version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return cp.returncode == 0

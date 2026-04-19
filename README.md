@@ -154,32 +154,56 @@ spec 文件用 `SPECPATH` 动态解析路径，仓库放到哪里都能打包。
 - 设置键名集中在 `SettingsKey` 类里，拼写错误编译期可见。
 - `.gitignore` 已包含 build / __pycache__ / .DS_Store / 用户配置。
 
-## FFmpeg 二进制说明 / 故障排查
+## FFmpeg 管理策略
 
-本项目在 `resources/` 下附带了 `ffmpeg` 和 `ffprobe` 可执行文件。如果运行时看到
-`dyld: Library not loaded: /opt/homebrew/opt/...` 这类错误，说明 bundled 二进制
-是在当时的开发机上直接拷贝过来的，动态链接了一堆 Homebrew 库，在干净的机器上会
-找不到依赖。
+设计目标：**开箱即用 + 不污染系统 + 卸载干净**。
 
-`converter.constants._resolve_executable` 会自动探测 bundled 二进制能否运行，
-不能的话回退到 `PATH` 上的 `ffmpeg`。所以你可以直接：
+### 仓库层
 
-```bash
-# macOS
-brew install ffmpeg
-```
+`resources/ffmpeg` 和 `resources/ffmpeg.exe`（以及对应 `ffprobe`）不追踪到 git：
+- 二进制体积大，会让 clone 变慢；
+- 不同平台的 ffmpeg 互不兼容（macOS Mach-O、Windows PE、Linux ELF），commit 一份只能覆盖一个平台；
+- 旧版本打包时 commit 过 Homebrew 依赖的 ffmpeg，结果换机器就跑不起来。
 
-但 Homebrew 版 ffmpeg 8 默认未编译 `libass`，`subtitles` filter 不可用，
-**字幕烧录会失败**。可以改用 [evermeet.cx](https://evermeet.cx/ffmpeg/) 的
-静态版本（包含 libass），或者源码编译 `--enable-libass` 的版本。
+### 运行时的查找顺序
 
-```bash
-# 推荐：下载静态 ffmpeg（含 libass）
-curl -sSL -o /tmp/ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-curl -sSL -o /tmp/ffprobe.zip https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip
-unzip -o /tmp/ffmpeg.zip -d /opt/homebrew/bin/   # 或放到你的 PATH 任何目录
-unzip -o /tmp/ffprobe.zip -d /opt/homebrew/bin/
-```
+`converter/constants.py` 的 `_resolve_executable` 按以下顺序找 ffmpeg / ffprobe，第一个能跑的就用：
+
+1. **应用内置** `resources/ffmpeg`（PyInstaller 打包进 `_MEIPASS`）
+2. **应用数据目录缓存** `<App Data>/Convert/ffmpeg/ffmpeg`（首次运行自动下载到这里）
+3. **系统 PATH** 上的 `ffmpeg`
+4. **常见安装位置**（macOS：`/opt/homebrew/bin`、`/usr/local/bin`；Windows：`C:\Program Files\ffmpeg\bin` 等）
+
+每一步都真正跑一次 `ffmpeg -version` 验证能执行，而不是只看文件存在。所以即使 bundled 的 ffmpeg 因为缺 dylib 无法运行，也能自动回落到其它路径。
+
+### App Data 目录
+
+| 平台 | 路径 |
+|---|---|
+| macOS | `~/Library/Application Support/Convert/` |
+| Windows | `%LOCALAPPDATA%\Convert\` |
+| Linux | `~/.local/share/Convert/` |
+
+要彻底清理程序（包括自动下载的 ffmpeg 缓存），只要删掉这个目录。程序从不修改系统 PATH、不放快捷方式在别处、不需要管理员权限。
+
+### 首次启动：找不到 ffmpeg 怎么办
+
+程序启动时如果上述四种路径都找不到可用的 ffmpeg，弹出 **FirstRunDialog**，提供三个选择：
+
+1. **自动下载（推荐）**：从对应平台的静态源下载，解压到 App Data 目录。
+   - macOS: [evermeet.cx](https://evermeet.cx/ffmpeg/) (静态，含 libass)
+   - Windows: [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (release-essentials, 含 libass)
+   - Linux: [johnvansickle.com](https://johnvansickle.com/ffmpeg/) (amd64 / arm64 静态)
+2. **指定已有 FFmpeg…**：打开文件选择器，用户指向自己已经装好的 ffmpeg。程序会把它和旁边的 ffprobe **复制**（不是链接）到 App Data 目录，下次启动直接用。
+3. **退出**：放弃启动。
+
+下载时显示进度条和状态文字（"正在下载 / 解压 / 验证"）。Apple Silicon 上首次执行 x86_64 ffmpeg 需要 Rosetta 2 翻译，首启动会停留 10-20 秒在"验证"阶段，**这是正常的**。
+
+### 打包时预置 ffmpeg（避免用户看到 FirstRunDialog）
+
+`scripts/build_*.{sh,bat} --download-ffmpeg` 会在打包前把对应平台的静态 ffmpeg 下载到 `resources/`，PyInstaller 会连同打包进 `.app`/`.exe`。这样最终用户拿到的安装包**内置了可用的 ffmpeg**，首次启动直接进入主界面。
+
+`Main.spec` 会按平台过滤：mac 打包时排除 `resources/ffmpeg.exe`，Windows 打包时排除 `resources/ffmpeg`（macOS Mach-O 二进制）。同一份仓库两边都能正确打包。
 
 ## 已知保留的设计决策
 
