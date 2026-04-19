@@ -27,12 +27,15 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import constants
+from ..constants import SettingsKey
 from ..ffmpeg.installer import (
     InstallError,
+    app_data_dir,
     cached_binary_paths,
     ffmpeg_cache_dir,
     install_bundle,
     remove_cache,
+    set_data_dir_override,
 )
 
 
@@ -77,35 +80,49 @@ class FirstRunDialog(QDialog):
     SUCCESS = 1
     ABORTED = 0
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, settings=None, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("首次启动 · 需要 FFmpeg")
         self.setModal(True)
-        self.resize(560, 360)
+        self.resize(620, 400)
         self._thread: _InstallThread | None = None
         self._result_status = self.ABORTED
+        self._settings = settings  # optional QSettings to persist custom path
         self._build_ui()
 
     # ---- UI -----------------------------------------------------------
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         title = QLabel("找不到可用的 FFmpeg")
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
 
         body = QLabel(
-            "这个程序需要 FFmpeg 来处理音视频。\n"
-            "为了不污染你的系统 PATH，本程序会把二进制文件下载到自己的数据目录：\n"
-            f"  {ffmpeg_cache_dir()}\n"
-            "之后要彻底清理，只需要删掉那个目录（或整个 Convert 数据夹）。\n\n"
-            "如果你已经用 Homebrew / gyan.dev 之类装过 FFmpeg，也可以直接指定路径。"
+            "本程序需要 FFmpeg 来处理音视频。\n"
+            "我们会把二进制文件下载到下方显示的目录，不会写入系统 PATH 或其它位置。\n"
+            "将来要清理，只需要删掉那个目录即可。\n\n"
+            "如果你已经装过 FFmpeg（brew / gyan.dev / 手动编译），可以直接指定路径。"
         )
         body.setWordWrap(True)
         body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(body)
+
+        # Download location row.
+        loc_row = QHBoxLayout()
+        loc_row.setSpacing(8)
+        loc_row.addWidget(QLabel("下载位置:"))
+        self.location_label = QLabel(str(ffmpeg_cache_dir()))
+        self.location_label.setStyleSheet("color: #888;")
+        self.location_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.location_label.setWordWrap(True)
+        loc_row.addWidget(self.location_label, 1)
+        self.btn_change_location = QPushButton("更改…")
+        self.btn_change_location.clicked.connect(self._pick_data_dir)
+        loc_row.addWidget(self.btn_change_location)
+        layout.addLayout(loc_row)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)   # permille for smoother updates
@@ -269,6 +286,27 @@ class FirstRunDialog(QDialog):
     def _lock_buttons(self, locked: bool) -> None:
         self.btn_download.setEnabled(not locked)
         self.btn_browse.setEnabled(not locked)
+        self.btn_change_location.setEnabled(not locked)
+
+    # ---- Data directory override -------------------------------------
+    def _pick_data_dir(self) -> None:
+        current = str(app_data_dir().parent)  # default parent (excluding "Convert")
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择下载位置的父目录（其下会新建 Convert/ 子目录）", current,
+        )
+        if not chosen:
+            return
+        if not os.access(chosen, os.W_OK):
+            QMessageBox.warning(
+                self, "无法写入",
+                f"{chosen} 不可写。请选一个你有权限的目录。",
+            )
+            return
+        set_data_dir_override(chosen)
+        if self._settings is not None:
+            self._settings.setValue(SettingsKey.CUSTOM_DATA_DIR, chosen)
+            self._settings.sync()
+        self.location_label.setText(str(ffmpeg_cache_dir()))
 
     # ---- Result ------------------------------------------------------
     @property

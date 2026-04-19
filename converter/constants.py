@@ -50,6 +50,9 @@ class SettingsKey:
     USE_HW_ACCEL = "use_hw_accel"
     QUALITY_PRESET = "quality_preset"   # "fast" / "balanced" / "high"
     OVERLAY_STRENGTH = "overlay_strength"  # 0..100: readability overlay opacity
+    # Custom data directory for auto-downloaded ffmpeg (Windows C-drive relief).
+    # Empty string = use the platform default under AppData / Library / .local/share.
+    CUSTOM_DATA_DIR = "custom_data_dir"
     # Last-used selections per tab, so reopening the app feels familiar.
     LAST_AUDIO_FORMAT = "last_audio_format"
     LAST_VIDEO_FORMAT = "last_video_format"

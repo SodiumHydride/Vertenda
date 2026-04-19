@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Application entrypoint.
 
-Responsibility: Qt bootstrapping + Windows subprocess window suppression.
+Responsibility: decide between GUI and CLI mode, set up Qt if GUI.
 All business logic lives in the `converter` package.
 """
 
@@ -33,41 +33,78 @@ if sys.platform == "win32":
     subprocess.Popen = _popen_no_window  # type: ignore[assignment]
 
 
-from PyQt5.QtWidgets import QApplication, QDialog  # noqa: E402
+# macOS LaunchServices appends -psn_X_Y to argv when a .app is launched from
+# Finder. Strip those so argparse doesn't choke.
+def _clean_argv(argv: list[str]) -> list[str]:
+    return [a for a in argv if not a.startswith("-psn_")]
 
-from converter import constants  # noqa: E402
-from converter.ffmpeg.probe import check_ffmpeg_available  # noqa: E402
-from converter.ui.main_window import ConverterMainWindow  # noqa: E402
 
-
-def _ensure_ffmpeg(app: QApplication) -> bool:
-    """Make sure a runnable ffmpeg+ffprobe exist. Show the first-run dialog if not."""
-    if check_ffmpeg_available():
-        return True
-
-    # Imported lazily so the helper module does not import Qt at test time.
-    from converter.ui.first_run_dialog import FirstRunDialog
-
-    dlg = FirstRunDialog()
-    dlg.exec_()
-    if not dlg.succeeded:
+def _should_use_cli(argv: list[str]) -> bool:
+    """CLI mode: any command-line arg given (except explicit --gui)."""
+    if not argv:
         return False
+    if "--gui" in argv:
+        return False
+    return True
 
-    constants.FFMPEG_PATH, constants.FFPROBE_PATH = constants.resolve_ffmpeg_paths()
-    return check_ffmpeg_available()
+
+def _run_cli(argv: list[str]) -> int:
+    # Import lazily so a `convert install-ffmpeg` invocation from a headless
+    # shell doesn't drag in Qt dependencies.
+    from converter.cli import main as cli_main
+    return cli_main(argv)
 
 
-def main() -> int:
+def _run_gui() -> int:
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QApplication
+
+    from converter import constants
+    from converter.constants import SettingsKey, app_runtime_dir
+    from converter.ffmpeg.installer import set_data_dir_override
+    from converter.ffmpeg.probe import check_ffmpeg_available
+    from converter.ui.main_window import ConverterMainWindow
+
     app = QApplication(sys.argv)
     app.setApplicationName("Convert")
     app.setOrganizationName("Kurisu")
 
-    if not _ensure_ffmpeg(app):
-        return 1
+    # Load custom data directory BEFORE we resolve ffmpeg paths.
+    config_path = os.path.join(app_runtime_dir(), "converter_config.ini")
+    settings = QSettings(config_path, QSettings.IniFormat)
+    settings.setFallbacksEnabled(False)
+    override = settings.value(SettingsKey.CUSTOM_DATA_DIR, "", type=str).strip()
+    if override and os.path.isdir(override):
+        set_data_dir_override(override)
+    else:
+        set_data_dir_override(None)
+    constants.FFMPEG_PATH, constants.FFPROBE_PATH = constants.resolve_ffmpeg_paths()
+
+    if not check_ffmpeg_available():
+        # Apply the theme first so the first-run dialog looks like part of the app.
+        from converter.ui.first_run_dialog import FirstRunDialog
+        from converter.ui.theme import build_stylesheet
+        theme = settings.value(SettingsKey.THEME_MODE, "Dark", type=str)
+        app.setStyleSheet(build_stylesheet(theme))
+
+        dlg = FirstRunDialog(settings=settings)
+        dlg.exec_()
+        if not dlg.succeeded:
+            return 1
+        constants.FFMPEG_PATH, constants.FFPROBE_PATH = constants.resolve_ffmpeg_paths()
+        if not check_ffmpeg_available():
+            return 1
 
     window = ConverterMainWindow()
     window.show()
     return app.exec_()
+
+
+def main() -> int:
+    argv = _clean_argv(sys.argv[1:])
+    if _should_use_cli(argv):
+        return _run_cli(argv)
+    return _run_gui()
 
 
 if __name__ == "__main__":

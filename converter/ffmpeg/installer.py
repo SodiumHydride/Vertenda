@@ -16,6 +16,8 @@ Download sources (all current as of 2024+):
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import os
 import shutil
 import stat
@@ -33,24 +35,53 @@ from typing import Callable
 
 
 APP_FOLDER_NAME = "Convert"
+INSTALL_MARKER_NAME = ".installed_by_convert.json"
 
 
-def app_data_dir() -> Path:
-    """Per-user writable data directory for the app.
+# User-selectable override. When set, ffmpeg is cached under <override>/Convert/
+# rather than the platform default. Managed via `set_data_dir_override` + reads
+# from QSettings upstream (kept out of this module to avoid a Qt dependency).
+_data_dir_override: Path | None = None
 
-    Deliberately stdlib-only so the path is stable whether we're running as
-    a packaged .app (where QApplication.applicationName is set) or as
-    ``python Main.py`` during development (where it may not be).
+
+def set_data_dir_override(path: str | Path | None) -> None:
+    """Opt-in user-chosen parent for the app data directory.
+
+    Pass `None` or an empty string to revert to the platform default.
+    The override should be an existing writable directory; we create our
+    own ``Convert/`` subdir inside it.
     """
+    global _data_dir_override
+    if not path:
+        _data_dir_override = None
+        return
+    _data_dir_override = Path(path).expanduser().resolve()
+
+
+def get_data_dir_override() -> Path | None:
+    return _data_dir_override
+
+
+def _default_app_data_dir() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / APP_FOLDER_NAME
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / APP_FOLDER_NAME
-    # Linux / BSD: XDG_DATA_HOME or fallback.
     xdg = os.environ.get("XDG_DATA_HOME")
     base = Path(xdg) if xdg else (Path.home() / ".local" / "share")
     return base / APP_FOLDER_NAME
+
+
+def app_data_dir() -> Path:
+    """Per-user writable data directory for the app.
+
+    Respects :func:`set_data_dir_override` when set, otherwise falls back to
+    the platform-default location.
+    """
+    if _data_dir_override is not None:
+        return _data_dir_override / APP_FOLDER_NAME
+    return _default_app_data_dir()
 
 
 def ffmpeg_cache_dir() -> Path:
@@ -66,9 +97,22 @@ def cached_binary_paths() -> tuple[Path, Path]:
     return d / "ffmpeg", d / "ffprobe"
 
 
+def install_marker_path() -> Path:
+    return ffmpeg_cache_dir() / INSTALL_MARKER_NAME
+
+
 def has_cached_binaries() -> bool:
     ff, fp = cached_binary_paths()
     return ff.is_file() and fp.is_file() and _probe(ff) and _probe(fp)
+
+
+def installed_by_us() -> bool:
+    """Return True when the cached binaries were placed there by our installer.
+
+    Used by the uninstall flow: we only offer to delete ffmpeg when we're
+    confident the user didn't point us at their own brew/system install.
+    """
+    return install_marker_path().is_file() and has_cached_binaries()
 
 
 def _probe(path: Path, *, timeout: float = 4.0) -> bool:
@@ -305,14 +349,82 @@ def install_bundle(on_progress: ProgressCallback | None = None,
             "  softwareupdate --install-rosetta --agree-to-license"
         )
 
+    _write_marker(plan, ff, fp)
     _status("✓ 安装完成")
     return ff, fp
 
 
+def _write_marker(plan: list[DownloadAsset], ff: Path, fp: Path) -> None:
+    """Record that we own this copy so the uninstaller can safely delete it."""
+    try:
+        from converter import __version__ as app_version
+    except Exception:
+        app_version = "unknown"
+
+    def _head_line(path: Path) -> str:
+        try:
+            cp = subprocess.run(
+                [str(path), "-version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return (cp.stdout.splitlines() or [""])[0].strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    data = {
+        "schema": 1,
+        "installed_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "app_version": app_version,
+        "sources": [a.url for a in plan],
+        "ffmpeg_version": _head_line(ff),
+        "ffprobe_version": _head_line(fp),
+        "platform": sys.platform,
+    }
+    try:
+        install_marker_path().write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # Marker is nice-to-have; don't fail install on write error.
+
+
+def read_marker() -> dict | None:
+    """Parse the marker file, or return None when missing/corrupt."""
+    p = install_marker_path()
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def remove_cache() -> bool:
-    """Wipe the ffmpeg cache. Returns True if anything was removed."""
+    """Wipe the ffmpeg cache directory. Returns True if anything was removed.
+
+    Safe to call unconditionally: no-op if the directory doesn't exist.
+    Note: this deletes everything under ``ffmpeg_cache_dir()`` whether or not
+    the marker is present. For conservative cleanup, callers should check
+    :func:`installed_by_us` first.
+    """
     d = ffmpeg_cache_dir()
     if not d.exists():
         return False
     shutil.rmtree(d, ignore_errors=True)
     return True
+
+
+def cache_size_bytes() -> int:
+    """Total disk usage of the ffmpeg cache directory, 0 when absent."""
+    d = ffmpeg_cache_dir()
+    if not d.exists():
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(d):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+    return total

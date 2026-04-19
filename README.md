@@ -205,6 +205,115 @@ spec 文件用 `SPECPATH` 动态解析路径，仓库放到哪里都能打包。
 
 `Main.spec` 会按平台过滤：mac 打包时排除 `resources/ffmpeg.exe`，Windows 打包时排除 `resources/ffmpeg`（macOS Mach-O 二进制）。同一份仓库两边都能正确打包。
 
+### 自定义数据目录（解决 C 盘占用）
+
+Windows 用户常常 C 盘紧张，不希望在 `%LOCALAPPDATA%` 下多个 160MB。应用内提供了调节：
+
+- **首次启动时**：FirstRunDialog 上方显示"下载位置"，旁边一个"更改…"按钮
+- **任何时候**：设置 → 数据与存储 → 数据目录，改到 D 盘或其他位置
+- 老位置的缓存**不会自动迁移**。换目录之后如果真需要 ffmpeg，会在新目录重新下载一次。
+
+### 安装 marker
+
+下载完成后在缓存目录写一个 `.installed_by_convert.json`，里面记录：
+
+```json
+{
+  "schema": 1,
+  "installed_at": "2026-04-19T14:00:00Z",
+  "app_version": "2.0.0",
+  "sources": ["https://evermeet.cx/ffmpeg/getrelease/zip", ...],
+  "ffmpeg_version": "ffmpeg version 8.1-tessus ...",
+  "platform": "darwin"
+}
+```
+
+这个文件是**"只有我们安装的才能删"的判据**。设置里的"清除 FFmpeg 缓存"按钮仅在 marker 存在时启用，确保不会把你 `brew install ffmpeg` 的副本误删。
+
+## 卸载
+
+我们刻意**不做**正式的 installer / 自删除逻辑，保持"拖走即干净"的 macOS 惯例和 Windows 的便携体验。正确的卸载流程：
+
+1. 打开 **设置 → 数据与存储**
+2. 点 **清除 FFmpeg 缓存**（会提示大小 / 来源，确认后删）
+3. （可选）点 **打开数据目录**，确认里面只剩 `converter_config.ini`，想彻底清就手动删整个目录
+4. 把 `Main.app` 拖进废纸篓 / 删除 `Main.exe` 所在目录
+
+本程序**从不**修改：
+- 系统 PATH
+- Windows 注册表（除非你在设置里开启了"右键集成"，那时也只写 HKCU）
+- `/usr/local/bin` 或其他系统目录
+- 启动项 / 登录项
+
+所以即便你直接拖走了 app 再想起来还有 160MB 缓存在 app data 里，手动删掉那个目录就完事，没有任何隐藏残留。
+
+## CLI 用法
+
+GUI 和 CLI 共享同一套业务代码，无参启动是 GUI，有参是 CLI。
+
+### 常用形式（推荐）
+
+```bash
+# 单文件转换（自动识别类型）
+Main input.wav -f mp3
+Main input.mov -f mp4 --hw-accel --quality high
+Main input.srt -f lrc
+
+# 指定输出位置
+Main input.mov -f mp4 -o /path/to/out.mp4
+Main input.mov -f mp4 -d /output/dir/     # 只指定输出目录
+```
+
+### 子命令
+
+```bash
+# 烧录字幕
+Main burn video.mp4 subs.srt -o out.mp4             # 硬编码（默认）
+Main burn video.mp4 subs.srt -o out.mkv --soft      # 软封装
+
+# 合并音视频
+Main merge audio.mp3 video.mp4 -o merged.mp4
+
+# 管理 FFmpeg 缓存
+Main install-ffmpeg                                   # 主动下载
+Main install-ffmpeg --data-dir D:\MyTools            # 指定下载到别处
+Main uninstall-ffmpeg                                 # 清除（只动自己下载的）
+
+# 诊断
+Main where                                            # 打印解析到的路径、marker 信息
+Main --version
+Main --gui                                            # 明确打开 GUI
+```
+
+### 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 2 | 用法错误（文件不存在、参数非法） |
+| 3 | 运行时错误（ffmpeg 失败、取消） |
+| 4 | 未找到可用的 FFmpeg |
+
+## Windows 右键菜单（可选）
+
+**设置 → 转换 → 右键集成** 勾选后，在 Windows 资源管理器里右键常见的音视频/字幕文件，会多出一个子菜单：
+
+```
+右键 video.mp4
+ └─ 转换 (Kurisu) >
+     ├─ 转为 MP3 (仅音频)
+     ├─ 转为 MP4
+     ├─ 转为 MKV
+     └─ 用 Kurisu 打开
+```
+
+实现细节：
+- 只写 `HKCU\Software\Classes\...`（用户注册表），不需要管理员权限
+- 使用 CommandStore + SubCommands 做二级菜单，右键只多出"转换 (Kurisu)"一行，点开才展开
+- 只在 **Main.exe 是打包后的** 情况下有意义（源码运行时会指向 `Main.py` 但 Explorer 没法直接跑 .py）
+- 取消勾选 → 立即 unregister，不留痕迹
+- **只在 Windows 上显示这个开关**，其他平台看不到
+
 ## 已知保留的设计决策
 
 1. **保留 PyQt5 而不升级到 PyQt6**：用户没要求，升级需要处理 enum 全限定名、信号类型变化等破坏性改动，属于"你没要求我做，但做了一定炸"的雷区。
