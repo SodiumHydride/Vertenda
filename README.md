@@ -155,16 +155,16 @@ python Main.py --gui                                        # 明确打开 GUI
 ### 运行时参数
 
 
-| 参数                            | 说明                                              |
-| ----------------------------- | ----------------------------------------------- |
-| `-q, --quality`               | `fast` / `balanced` / `high`（默认 `balanced`）     |
-| `--hw-accel`                  | 开启硬件加速（macOS VideoToolbox / Windows 自动选 NVENC·QSV·AMF）|
-| `--conflict`                  | `skip` / `overwrite` / `rename`（默认 `overwrite`） |
-| `--filename-template`         | 输出文件名模板，默认 `{base}`                             |
-| `--concurrency`               | `auto` 或 `1`–`8`（默认 `auto`）                     |
-| `--scale`                     | `1080p` / `720p` / `480p` / `WxH`               |
-| `--normalize`                 | 音量归一化（loudnorm EBU R128）                        |
-| `--trim-start` / `--trim-end` | 裁剪起止时间（秒）                                       |
+| 参数                            | 说明                                                     |
+| ----------------------------- | ------------------------------------------------------ |
+| `-q, --quality`               | `fast` / `balanced` / `high`（默认 `balanced`）            |
+| `--hw-accel`                  | 开启硬件加速（macOS VideoToolbox / Windows 自动选 NVENC·QSV·AMF） |
+| `--conflict`                  | `skip` / `overwrite` / `rename`（默认 `overwrite`）        |
+| `--filename-template`         | 输出文件名模板，默认 `{base}`                                    |
+| `--concurrency`               | `auto` 或 `1`–`8`（默认 `auto`）                            |
+| `--scale`                     | `1080p` / `720p` / `480p` / `WxH`                      |
+| `--normalize`                 | 音量归一化（loudnorm EBU R128）                               |
+| `--trim-start` / `--trim-end` | 裁剪起止时间（秒）                                              |
 
 
 ### 退出码
@@ -405,14 +405,14 @@ scripts\build_windows.bat --clean
 
 **一个刻意的保守决定**：Windows 上 `use_hw=True` 时我们**不传 `-hwaccel` 输入标志**，只用硬件编码器、不用硬件解码器。因为 `-hwaccel cuda` 在缺少对应解码器的 stock ffmpeg 上会直接 fail，而仅编码硬件化就能拿到大部分加速。全链路硬件（解 + 编）作为 v2.1 的增强项保留。
 
-编码器参数统一成 CRF-like 数值（`-cq` / `-global_quality` / `-qp_*`），让快速/均衡/高质量三档在所有编码器上语义一致，用户不用记每种 GPU 的独特调参逻辑。
+编码器参数统一成 CRF-like 数值（`-cq` / `-global_quality` / `-qp_`*），让快速/均衡/高质量三档在所有编码器上语义一致，用户不用记每种 GPU 的独特调参逻辑。
 
 ### 硬编码取舍
 
 - **PyQt5 而非 PyQt6**：PyQt6 的 enum 全限定、signal 语法、高 DPI 模型都是破坏性变更；目前 PyQt5 够用且测试覆盖齐。欢迎 PR 迁移。
 - **LRC 毫秒精度**：LRC 标准只到百分秒（cs），但实际存在写 ms 的文件。parser 根据小数位数自适应。
 - **RMVB**：ffmpeg 官方不带 `librmvb`，打包不内置；需要用户自行提供支持该编码器的 ffmpeg。
-- **Linux 暂无硬件加速**：VAAPI/NVENC on Linux 是可行的，但需要更精细的检测（`/dev/dri/*` 存在性 + 编码器列表交叉判定），作为未来版本的功能。
+- **Linux 暂无硬件加速**：VAAPI/NVENC on Linux 是可行的，但需要更精细的检测（`/dev/dri/`* 存在性 + 编码器列表交叉判定），作为未来版本的功能。
 
 ---
 
