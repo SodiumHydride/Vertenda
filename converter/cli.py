@@ -150,6 +150,56 @@ def cmd_uninstall_ffmpeg(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_install_context_menu(_args: argparse.Namespace) -> int:
+    """Register the Windows Explorer cascading context menu under HKCU.
+
+    Works against the running binary: in a PyInstaller frozen build that is
+    ``Vertenda.exe``; in a source checkout we have no stable exe to point at,
+    so the caller must build first.
+    """
+    if sys.platform != "win32":
+        _err("右键菜单集成只在 Windows 可用。")
+        return EXIT_USAGE
+    from .shell import win_registry  # imported lazily so macOS/Linux stay clean
+    exe = _context_menu_exe_path()
+    if exe is None:
+        _err("源码模式下无法自动确定可执行文件路径；请先用 scripts\\build_windows.bat 打包后再运行此命令。")
+        return EXIT_RUNTIME
+    try:
+        win_registry.register(exe)
+    except (OSError, win_registry.PlatformError, FileNotFoundError) as exc:
+        _err(f"注册失败: {exc}")
+        return EXIT_RUNTIME
+    _info(f"已注册右键菜单 (指向 {exe})。")
+    _info("提示: 如果菜单没立刻出现，重启资源管理器 (taskkill /f /im explorer.exe && start explorer) 或注销登录。")
+    return EXIT_OK
+
+
+def cmd_uninstall_context_menu(_args: argparse.Namespace) -> int:
+    if sys.platform != "win32":
+        _err("右键菜单集成只在 Windows 可用。")
+        return EXIT_USAGE
+    from .shell import win_registry
+    try:
+        win_registry.unregister()
+    except win_registry.PlatformError as exc:
+        _err(str(exc))
+        return EXIT_RUNTIME
+    _info("已移除右键菜单 (包括旧版本残留)。")
+    return EXIT_OK
+
+
+def _context_menu_exe_path() -> str | None:
+    """Path to embed in the registry ``command`` values.
+
+    Only returns a path when we are running a frozen build; otherwise the
+    caller cannot safely point Explorer at a stable executable.
+    """
+    if getattr(sys, "frozen", False):
+        return sys.executable
+    return None
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
     """Single-file conversion (possibly to an audio target = extract audio)."""
     if not _require_ffmpeg():
@@ -373,6 +423,14 @@ def build_parser() -> argparse.ArgumentParser:
     un_p = sub.add_parser("uninstall-ffmpeg", help="删除本程序下载的 FFmpeg 缓存")
     un_p.set_defaults(func=cmd_uninstall_ffmpeg)
 
+    ctx_in_p = sub.add_parser("install-context-menu",
+                               help="注册 Windows 资源管理器右键菜单 (HKCU)")
+    ctx_in_p.set_defaults(func=cmd_install_context_menu)
+
+    ctx_un_p = sub.add_parser("uninstall-context-menu",
+                               help="移除 Windows 资源管理器右键菜单 (含旧版残留)")
+    ctx_un_p.set_defaults(func=cmd_uninstall_context_menu)
+
     where_p = sub.add_parser("where", help="打印路径信息，用于排错")
     where_p.set_defaults(func=cmd_where)
 
@@ -430,7 +488,10 @@ def _version_string() -> str:
 # ----------------------------------------------------------------------
 
 _KNOWN_SUBCOMMANDS = {
-    "convert", "burn", "merge", "install-ffmpeg", "uninstall-ffmpeg", "where",
+    "convert", "burn", "merge",
+    "install-ffmpeg", "uninstall-ffmpeg",
+    "install-context-menu", "uninstall-context-menu",
+    "where",
 }
 
 
