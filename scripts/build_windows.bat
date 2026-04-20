@@ -192,9 +192,11 @@ if errorlevel 1 (
 )
 
 if exist "dist\Vertenda\Vertenda.exe" (
-    echo [build] 打包完成: dist\Vertenda\Vertenda.exe
+    set "OUTPUT_EXE=dist\Vertenda\Vertenda.exe"
+    echo [build] 打包完成: !OUTPUT_EXE!
 ) else if exist "dist\Vertenda.exe" (
-    echo [build] 打包完成: dist\Vertenda.exe
+    set "OUTPUT_EXE=dist\Vertenda.exe"
+    echo [build] 打包完成: !OUTPUT_EXE!
 ) else (
     echo [error] 未找到 Vertenda.exe。请检查 PyInstaller 输出。
     popd >nul
@@ -202,8 +204,8 @@ if exist "dist\Vertenda\Vertenda.exe" (
 )
 
 echo.
-echo [build] ✓ 全部完成。
-echo [build]   可以运行:  dist\Vertenda\Vertenda.exe
+echo [build] Build completed successfully.
+echo [build]   可以运行:  !OUTPUT_EXE!
 echo.
 popd >nul
 endlocal
