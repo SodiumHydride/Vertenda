@@ -48,6 +48,23 @@ def _should_use_cli(argv: list[str]) -> bool:
     return True
 
 
+def _extract_initial_files(argv: list[str]) -> list[str]:
+    """Collect existing-file positional args from a --gui invocation.
+
+    Right-click context-menu integration uses ``Vertenda.exe --gui "%1"``
+    as a fallback when a user clicks the cascade parent item instead of a
+    submenu entry. We preload those files into the matching tab so the GUI
+    opens ready-to-convert instead of empty.
+    """
+    files: list[str] = []
+    for arg in argv:
+        if arg.startswith("-"):
+            continue
+        if os.path.isfile(arg):
+            files.append(os.path.abspath(arg))
+    return files
+
+
 def _run_cli(argv: list[str]) -> int:
     # Import lazily so a `convert install-ffmpeg` invocation from a headless
     # shell doesn't drag in Qt dependencies.
@@ -55,7 +72,7 @@ def _run_cli(argv: list[str]) -> int:
     return cli_main(argv)
 
 
-def _run_gui() -> int:
+def _run_gui(initial_files: list[str] | None = None) -> int:
     from PyQt5.QtCore import QSettings
     from PyQt5.QtWidgets import QApplication
 
@@ -95,7 +112,7 @@ def _run_gui() -> int:
         if not check_ffmpeg_available():
             return 1
 
-    window = ConverterMainWindow()
+    window = ConverterMainWindow(initial_files=initial_files)
     window.show()
     return app.exec_()
 
@@ -104,7 +121,7 @@ def main() -> int:
     argv = _clean_argv(sys.argv[1:])
     if _should_use_cli(argv):
         return _run_cli(argv)
-    return _run_gui()
+    return _run_gui(initial_files=_extract_initial_files(argv))
 
 
 if __name__ == "__main__":

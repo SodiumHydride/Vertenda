@@ -88,6 +88,44 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
 )
 
 
+# Extension classification for the cascade-parent fallback command.
+# When a user's shell fails to expand the cascade submenu (e.g. Windows 11's
+# compact context menu), clicking the parent item still needs to Do Something
+# Useful instead of erroring out or opening the GUI. The mapping below picks
+# a sensible "quick convert" target per input type so the click completes the
+# conversion in the background without any extra UI.
+_VIDEO_PARENT_EXTS = frozenset({
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".ts", ".rmvb",
+})
+_AUDIO_PARENT_EXTS = frozenset({
+    ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma",
+})
+_SUBTITLE_PARENT_EXTS = frozenset({
+    ".srt", ".ass", ".ssa", ".vtt", ".lrc",
+})
+
+
+def parent_fallback_args(extension: str) -> str:
+    """Return the ``tail`` for the cascade-parent direct command on *extension*.
+
+    The returned string is ``convert "%1" -f <target>`` with a target format
+    that's safe to apply even when the input shares the same extension — the
+    CLI deduplicates output filenames so ``foo.mp4 -> foo_1.mp4`` instead of
+    clobbering the source.
+    """
+    ext = extension.lower() if extension.startswith(".") else "." + extension.lower()
+    if ext in _VIDEO_PARENT_EXTS:
+        return 'convert "%1" -f mp4'
+    if ext in _AUDIO_PARENT_EXTS:
+        return 'convert "%1" -f mp3'
+    if ext in _SUBTITLE_PARENT_EXTS:
+        return 'convert "%1" -f srt'
+    # Unknown extension: open the GUI with the file preloaded. This branch is
+    # only reachable if a caller extends DEFAULT_EXTENSIONS without updating
+    # the classification sets above.
+    return '--gui "%1"'
+
+
 class PlatformError(RuntimeError):
     """Raised when shell integration is invoked on a non-Windows platform."""
 
@@ -248,6 +286,15 @@ def register(
                       build_command_line(exe_path, sc.exe_args))
 
     # 2) Top-level verb on each extension, pointing into the cascade root.
+    #
+    # Some Windows shells (notably the Windows 11 compact context menu) don't
+    # expand ExtendedSubCommandsKey cascades and instead surface the parent
+    # verb as a single clickable item. Without a direct command that click
+    # yields either "No application is associated..." or (with a --gui
+    # fallback) an empty GUI — neither matches the "quick convert" intent.
+    # Per-extension fallback: dispatch straight to a sensible convert target
+    # so clicking the parent actually performs the conversion in the
+    # background, saving output next to the source file.
     cascade_rel = cascade_root_path()
     for ext in extensions:
         verb = shell_verb_path(ext)
@@ -255,6 +302,8 @@ def register(
             w.SetValueEx(key, "MUIVerb",                0, w.REG_SZ, CASCADE_TITLE)
             w.SetValueEx(key, "Icon",                   0, w.REG_SZ, icon_value)
             w.SetValueEx(key, "ExtendedSubCommandsKey", 0, w.REG_SZ, cascade_rel)
+        _write_string(root, verb + r"\command", None,
+                      build_command_line(exe_path, parent_fallback_args(ext)))
         # Remove the obsolete SubCommands value if an older build left it behind.
         _delete_value(root, verb, "SubCommands")
 

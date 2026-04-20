@@ -96,7 +96,7 @@ class ConverterMainWindow(QMainWindow):
     TAB_SUBTITLE = 2
     TAB_BURN = 3
 
-    def __init__(self) -> None:
+    def __init__(self, initial_files: list[str] | None = None) -> None:
         super().__init__()
         self.setWindowTitle("盐酸转换器 · Vertenda")
         self.resize(self._DEFAULT_WIDTH, self._DEFAULT_HEIGHT)
@@ -128,6 +128,9 @@ class ConverterMainWindow(QMainWindow):
         self._install_shortcuts()
         self._apply_settings()
         self._restore_last_selections()
+
+        if initial_files:
+            self._preload_files(initial_files)
 
     # ---- Settings bootstrap -------------------------------------------
     def _setup_settings(self) -> None:
@@ -664,6 +667,30 @@ class ConverterMainWindow(QMainWindow):
         idx = self.burn_handles.output_format_combo.findText(out_fmt)
         if idx >= 0:
             self.burn_handles.output_format_combo.setCurrentIndex(idx)
+
+    def _preload_files(self, paths: list[str]) -> None:
+        """Dispatch files (from CLI/context-menu invocation) to matching tabs.
+
+        Each file goes to exactly one tab based on its extension. The tab
+        containing the last successfully dispatched file becomes active so
+        the user sees the loaded file immediately.
+        """
+        target_tab: int | None = None
+        for path in paths:
+            if is_audio_file(path):
+                added = self.audio_handles.file_list.add_path(path)
+                if added:
+                    target_tab = self.TAB_AUDIO
+            elif is_video_file(path):
+                added = self.video_handles.file_list.add_path(path)
+                if added:
+                    target_tab = self.TAB_VIDEO
+            elif is_subtitle_file(path):
+                added = self.subtitle_handles.file_list.add_path(path)
+                if added:
+                    target_tab = self.TAB_SUBTITLE
+        if target_tab is not None:
+            self.tabs.setCurrentIndex(target_tab)
 
     def _remember_selections(self) -> None:
         s = self.settings

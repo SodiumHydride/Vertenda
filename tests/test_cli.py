@@ -104,3 +104,46 @@ class TestEndToEndFfmpeg:
         assert exit_code == 0
         assert out.is_file()
         assert out.stat().st_size > 0
+
+
+class TestCollisionSafety:
+    """Right-click quick-convert calls ``Vertenda.exe convert "%1" -f mp4``
+    even for .mp4 inputs. The CLI must refuse to overwrite the input with
+    its own output instead of letting ffmpeg truncate the source."""
+
+    def test_explicit_output_equal_to_input_is_rejected(self, tmp_path):
+        src = tmp_path / "same.mp4"
+        src.write_bytes(b"fake content, never touched by ffmpeg")
+
+        exit_code = cli.main([str(src), "-f", "mp4", "-o", str(src)])
+        assert exit_code == cli.EXIT_USAGE
+        assert src.read_bytes() == b"fake content, never touched by ffmpeg"
+
+    def test_default_output_same_format_renames(self, tmp_path, monkeypatch):
+        """For context-menu flows we compute the output ourselves. When it
+        would collide with the input (same-format convert), fall back to a
+        unique sibling like ``foo_1.mp4`` instead of clobbering the source.
+        """
+        src = tmp_path / "clip.mp4"
+        src.write_bytes(b"source bytes")
+
+        captured: dict[str, str] = {}
+
+        def fake_build_convert_cmd(input_path, output_path, **kwargs):
+            captured["input"] = input_path
+            captured["output"] = output_path
+            return ["true"]
+
+        def fake_run_media(cmd, label, *, duration):
+            return cli.EXIT_OK
+
+        monkeypatch.setattr(cli, "_require_ffmpeg", lambda: True)
+        monkeypatch.setattr(cli, "get_media_duration", lambda _p: 1.0)
+        monkeypatch.setattr(cli, "build_convert_cmd", fake_build_convert_cmd)
+        monkeypatch.setattr(cli, "_run_media", fake_run_media)
+
+        exit_code = cli.main([str(src), "-f", "mp4"])
+        assert exit_code == cli.EXIT_OK
+        assert captured["input"] == str(src)
+        assert captured["output"] != str(src)
+        assert captured["output"].endswith("_1.mp4")

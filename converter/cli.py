@@ -60,6 +60,7 @@ from .ffmpeg.installer import (
     remove_cache,
     set_data_dir_override,
 )
+from .fs import ConflictPolicy, resolve_output_path
 from .subtitle.converters import (
     SubtitleConversionError,
     lrc_to_srt,
@@ -215,10 +216,20 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
     if args.output:
         out = os.path.abspath(args.output)
+        # Explicit -o must not point at the input itself: ffmpeg would read
+        # and truncate the same path concurrently, destroying the source.
+        if os.path.abspath(out) == os.path.abspath(src):
+            _err(f"输出路径与输入文件相同，已拒绝执行以防源文件被覆盖: {out}")
+            return EXIT_USAGE
     else:
+        # Default output sits next to the source file — matches user intent
+        # for right-click "quick convert" flows. Auto-rename on collision
+        # (which includes the same-format case, e.g. foo.mp4 -> foo_1.mp4)
+        # so a re-invocation never clobbers the input or a prior output.
         out_dir = args.output_dir or os.path.dirname(src)
         os.makedirs(out_dir, exist_ok=True)
         out = os.path.join(out_dir, Path(src).stem + "." + target)
+        out, _ = resolve_output_path(out, ConflictPolicy.RENAME)
 
     src_ext = ext_of(src)
     target_ext = "." + target

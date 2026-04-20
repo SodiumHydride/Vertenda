@@ -26,6 +26,7 @@ from converter.shell.win_registry import (
     cascade_root_path,
     extended_subcommand_path,
     legacy_command_store_path,
+    parent_fallback_args,
     shell_verb_path,
     sub_commands_field,
 )
@@ -146,3 +147,43 @@ class TestCustomSubcommand:
         sc = SubCommand("X", "x", "")
         assert sc.separator_before is False
         assert sc.position == ""
+
+
+class TestParentFallback:
+    """The cascade-parent command that fires when Explorer fails to expand
+    the submenu (Windows 11 compact context menu). Must perform a direct
+    conversion, never open the GUI, and never be empty."""
+
+    def test_video_extensions_fallback_to_mp4_convert(self):
+        for ext in (".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv"):
+            tail = parent_fallback_args(ext)
+            assert tail.startswith("convert "), f"{ext}: {tail}"
+            assert tail.endswith("-f mp4"), f"{ext}: {tail}"
+
+    def test_audio_extensions_fallback_to_mp3_convert(self):
+        for ext in (".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"):
+            tail = parent_fallback_args(ext)
+            assert tail.startswith("convert "), f"{ext}: {tail}"
+            assert tail.endswith("-f mp3"), f"{ext}: {tail}"
+
+    def test_subtitle_extensions_fallback_to_srt_convert(self):
+        for ext in (".srt", ".ass", ".ssa", ".vtt"):
+            tail = parent_fallback_args(ext)
+            assert tail.startswith("convert "), f"{ext}: {tail}"
+            assert tail.endswith("-f srt"), f"{ext}: {tail}"
+
+    def test_case_insensitive_and_dot_tolerant(self):
+        assert parent_fallback_args("MP4") == parent_fallback_args(".mp4")
+        assert parent_fallback_args(".MP4") == parent_fallback_args(".mp4")
+
+    def test_every_default_extension_resolves_to_convert(self):
+        # Regression guard: every shipped extension must get a concrete
+        # conversion target. If this fires, either DEFAULT_EXTENSIONS grew
+        # a new type or the classification sets drifted out of sync.
+        for ext in DEFAULT_EXTENSIONS:
+            assert parent_fallback_args(ext).startswith("convert "), ext
+
+    def test_unknown_extension_falls_back_to_gui(self):
+        tail = parent_fallback_args(".unknownext")
+        assert "--gui" in tail
+        assert '"%1"' in tail
