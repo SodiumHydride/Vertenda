@@ -193,11 +193,22 @@ def resolve_ffmpeg_paths() -> tuple[str, str]:
 
     Used after the first-run installer populates the cache dir so the running
     process can pick up the freshly-downloaded binaries without a restart.
+
+    Also resets the Windows hardware-encoder detection cache so the next
+    call to :func:`converter.ffmpeg.profiles.detect_windows_hw_encoder`
+    re-probes the (possibly different) ffmpeg binary. The import is lazy
+    to avoid a circular dependency at module load time.
     """
-    return (
+    paths = (
         _resolve_executable("resources/ffmpeg", "ffmpeg"),
         _resolve_executable("resources/ffprobe", "ffprobe"),
     )
+    try:
+        from .ffmpeg.profiles import reset_hw_detection_cache
+        reset_hw_detection_cache()
+    except ImportError:
+        pass
+    return paths
 
 
 FFMPEG_PATH: str

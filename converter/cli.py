@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Command-line interface for Convert.
+"""Command-line interface for Vertenda.
 
 Two usage shapes, both routed through the same argparse:
 
   Simple (happy-path) form - auto-detects input kind:
-    convert input.wav -f mp3
-    convert input.mov -f mp4 --hw-accel --quality high
-    convert input.srt -f lrc
+    vertenda input.wav -f mp3
+    vertenda input.mov -f mp4 --hw-accel --quality high
+    vertenda input.srt -f lrc
 
   Explicit subcommands for multi-input or management tasks:
-    convert burn video.mp4 subs.srt -o out.mp4 [--soft]
-    convert merge audio.mp3 video.mp4 -o merged.mp4
-    convert install-ffmpeg [--data-dir PATH]
-    convert uninstall-ffmpeg
-    convert where
-    convert --gui
+    vertenda burn video.mp4 subs.srt -o out.mp4 [--soft]
+    vertenda merge audio.mp3 video.mp4 -o merged.mp4
+    vertenda install-ffmpeg [--data-dir PATH]
+    vertenda uninstall-ffmpeg
+    vertenda where
+    vertenda --gui
 
 Design principle: the GUI and the CLI share the same worker functions and
 command builders. No business logic duplicated.
@@ -335,8 +335,8 @@ def _run_subtitle(src: str, src_ext: str, target: str, out: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="convert",
-        description="盐酸转换器 · CLI (与 GUI 共享同一套命令构造)",
+        prog="vertenda",
+        description="盐酸转换器 (Vertenda) · CLI (与 GUI 共享同一套命令构造)",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--gui", action="store_true", help="强制打开 GUI（默认无参时也是 GUI）")

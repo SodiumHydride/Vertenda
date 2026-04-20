@@ -47,6 +47,32 @@ class TestSpecValues:
             return int(spec.videotoolbox_bitrate.rstrip("M"))
         assert mbps(spec_for(QualityPreset.HIGH)) > mbps(spec_for(QualityPreset.BALANCED))
 
+    def test_windows_hw_quality_params_populated(self):
+        """Every preset must fill in all Windows hw encoder knobs so the
+        dataclass stays fully-parametrised — no Optional fields sneaking in.
+        """
+        for preset in QualityPreset:
+            spec = spec_for(preset)
+            assert spec.nvenc_preset.startswith("p")  # NVENC preset is pN format
+            assert spec.nvenc_cq
+            assert spec.qsv_preset
+            assert spec.qsv_global_quality
+            assert spec.amf_quality in ("speed", "balanced", "quality")
+            assert spec.amf_qp
+
+    def test_windows_hw_quality_scales_monotonically(self):
+        """Lower number = higher quality on all three Windows encoders,
+        matching libx264 CRF semantics for user predictability."""
+        def cq(preset):
+            return int(spec_for(preset).nvenc_cq)
+        def gq(preset):
+            return int(spec_for(preset).qsv_global_quality)
+        def qp(preset):
+            return int(spec_for(preset).amf_qp)
+        for metric in (cq, gq, qp):
+            assert metric(QualityPreset.HIGH) < metric(QualityPreset.BALANCED)
+            assert metric(QualityPreset.BALANCED) <= metric(QualityPreset.FAST)
+
 
 class TestSpecFlowsIntoCommands:
     def test_convert_cmd_respects_quality(self):

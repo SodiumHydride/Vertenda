@@ -63,7 +63,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Main',
+    name='Vertenda',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -81,7 +81,7 @@ exe = EXE(
 
 app = BUNDLE(
     exe,
-    name='Main.app',
+    name='Vertenda.app',
     icon=ICON_PATH if os.path.exists(ICON_PATH) else None,
-    bundle_identifier='com.kurisu.convert',
+    bundle_identifier='com.kurisu.vertenda',
 )

@@ -98,7 +98,7 @@ class ConverterMainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("盐酸转换器 · Kurisu Edition")
+        self.setWindowTitle("盐酸转换器 · Vertenda")
         self.resize(self._DEFAULT_WIDTH, self._DEFAULT_HEIGHT)
         self.setMinimumSize(1060, 700)
         self.setAcceptDrops(True)

@@ -1,6 +1,6 @@
 @echo off
 REM -----------------------------------------------------------------------------
-REM Salt Converter - Windows packaging script
+REM 盐酸转换器 - Vertenda - Windows packaging script
 REM
 REM Usage:
 REM   scripts\build_windows.bat [options]
@@ -40,7 +40,7 @@ exit /b 1
 
 :show_help
 echo.
-echo Salt Converter - Windows packaging
+echo Vertenda - Windows packaging
 echo.
 echo Usage:
 echo   scripts\build_windows.bat [--download-ffmpeg] [--clean]
@@ -191,19 +191,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if exist "dist\Main\Main.exe" (
-    echo [build] 打包完成: dist\Main\Main.exe
-) else if exist "dist\Main.exe" (
-    echo [build] 打包完成: dist\Main.exe
+if exist "dist\Vertenda\Vertenda.exe" (
+    echo [build] 打包完成: dist\Vertenda\Vertenda.exe
+) else if exist "dist\Vertenda.exe" (
+    echo [build] 打包完成: dist\Vertenda.exe
 ) else (
-    echo [error] 未找到 Main.exe。请检查 PyInstaller 输出。
+    echo [error] 未找到 Vertenda.exe。请检查 PyInstaller 输出。
     popd >nul
     exit /b 1
 )
 
 echo.
 echo [build] ✓ 全部完成。
-echo [build]   可以运行:  dist\Main\Main.exe
+echo [build]   可以运行:  dist\Vertenda\Vertenda.exe
 echo.
 popd >nul
 endlocal

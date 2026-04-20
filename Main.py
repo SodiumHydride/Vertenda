@@ -66,7 +66,7 @@ def _run_gui() -> int:
     from converter.ui.main_window import ConverterMainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Convert")
+    app.setApplicationName("Vertenda")
     app.setOrganizationName("Kurisu")
 
     # Load custom data directory BEFORE we resolve ffmpeg paths.

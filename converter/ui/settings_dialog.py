@@ -282,12 +282,12 @@ class SettingsDialog(QDialog):
 
         if sys.platform == "darwin":
             uninstall_text = (
-                "卸载方式：点击上方 “清除 FFmpeg 缓存”，然后把 Main.app 拖入废纸篓即可。\n"
+                "卸载方式：点击上方 “清除 FFmpeg 缓存”，然后把 Vertenda.app 拖入废纸篓即可。\n"
                 "本程序从未修改系统 PATH、注册表或其他位置。"
             )
         elif sys.platform == "win32":
             uninstall_text = (
-                "卸载方式：点击上方 “清除 FFmpeg 缓存”，然后删除 Main.exe 所在目录即可。\n"
+                "卸载方式：点击上方 “清除 FFmpeg 缓存”，然后删除 Vertenda.exe 所在目录即可。\n"
                 "本程序从未写入注册表（除可选的右键菜单项，已在上方管理）或其他系统位置。"
             )
         else:
@@ -394,7 +394,7 @@ class SettingsDialog(QDialog):
     def _pick_data_dir(self) -> None:
         start = self.data_dir_edit.text().strip() or str(app_data_dir().parent)
         chosen = QFileDialog.getExistingDirectory(
-            self, "选择数据目录的父目录（其下会创建 Convert/ 子目录）", start,
+            self, "选择数据目录的父目录（其下会创建 Vertenda/ 子目录）", start,
         )
         if not chosen:
             return
@@ -501,7 +501,7 @@ class SettingsDialog(QDialog):
                 self, "右键集成失败",
                 f"无法修改注册表：{exc}\n\n"
                 "请检查运行权限，或在命令行手动执行：\n"
-                "  Main.exe convert --gui\n"
+                "  Vertenda.exe --gui\n"
                 "来确认程序路径可达。",
             )
 

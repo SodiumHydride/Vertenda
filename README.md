@@ -1,158 +1,184 @@
-# 盐酸转换器 · Kurisu Edition
+# 盐酸转换器 · Vertenda
 
-多合一音频 / 视频 / 字幕转换器，带字幕烧录与 macOS GPU 硬件加速。
+> **Vertenda** · [vɛrˈtɛn.da] · Latin gerundive of *vertere* — "that which is to be turned / converted". An all-in-one audio / video / subtitle converter with subtitle burn-in and cross-platform GPU acceleration (VideoToolbox on macOS, NVENC / Quick Sync / AMF on Windows). PyQt5 GUI + full-featured CLI, sharing one ffmpeg command layer.
 
-原来是 2000 行的单文件 PyQt5 项目，现在拆分成清晰的模块，修掉一堆 P0 级的陷阱，套上一层现代化的 UI，并补齐了测试基线。
+多合一音频 / 视频 / 字幕转换器，带字幕烧录、批量队列、跨平台 GPU 硬件加速（macOS VideoToolbox，Windows NVENC / Quick Sync / AMF 自动识别）。GUI 与 CLI 共享同一套 ffmpeg 命令构造逻辑，业务代码不重复一行。
 
-## 功能
+名字 **Vertenda** 取自拉丁语动形词 *vertere*（转、变），字面意思是"那些将被转换之物"——正好对应这个工具的本质。
 
-- **音频转换**: mp3 / wav / flac / aac / ogg / opus 互转，使用专业级参数
-- **视频转换**: mp4 / mkv / mov / avi / flv / wmv / webm / ts / rmvb 互转
-- **视频 → 仅提取音频**: 视频 Tab 下拉里的"仅音频 · MP3 / FLAC / ..."一键剥离
-- **字幕转换**: srt / vtt / ass / ssa / lrc 互转（lrc 特殊情况会做多步转换）
-- **音视频合并**: 取列表中第一个音频和第一个视频合成
-- **字幕烧录**: 硬编码（永久烧入画面）/ 软封装（独立轨道），支持粉色+黑边样式
-- **质量预设**: 快速 / 均衡 / 高质量 三档，统一控制 libx264/x265/VideoToolbox/AAC
-- **macOS VideoToolbox 硬件加速**: 可在设置中开关
-- **真正可取消**: 取消按钮会立即 terminate 子进程，不再是心理安慰
-- **实时进度 · 批量显示**: 主进度 / 当前文件内部进度 / ETA / "[3/10] filename.mp4" 状态
-- **富格式下拉**: `★ MP3 · 通用有损 · 320 kbps · 兼容性最佳` 式的友好提示
-- **记住上次选择**: 每个 Tab 的格式、烧录模式、输出目录自动持久化
-- **右键联动**: 视频列表 → "发送到字幕烧录"，少一次拖拽
-- **从目录批量添加**: 一次递归扫整个文件夹
+License
+Python
+Platform
+Qt
 
-## 目录结构
+---
 
-```
-Convert/
-├── Main.py                      # 薄入口 (<50 行)
-├── Main.spec                    # PyInstaller 打包配置
-├── requirements.txt
-├── converter_config.ini         # 运行时产生，已加入 .gitignore
-├── resources/                   # 资源：ffmpeg/ffprobe/icons/default_bg
-├── converter/
-│   ├── constants.py             # 扩展名、路径常量、分类助手、SettingsKey
-│   ├── format_meta.py           # 格式元信息（标签、描述、推荐标记）
-│   ├── worker.py                # QThread：任务调度层 + 进度/ETA 信号
-│   ├── ffmpeg/
-│   │   ├── profiles.py          # 编码器配置（参数化为 QualitySpec）
-│   │   ├── quality.py           # QualityPreset 枚举和 QualitySpec
-│   │   ├── commands.py          # 命令构造（纯函数）
-│   │   ├── probe.py             # ffprobe 工具
-│   │   └── runner.py            # 可取消的子进程执行器
-│   ├── subtitle/
-│   │   ├── timestamps.py        # 秒 ↔ 时间戳（纯函数）
-│   │   ├── parsers.py           # 解析 lrc/srt/vtt → Cue
-│   │   ├── converters.py        # Cue ↔ 文件
-│   │   └── styling.py           # ASS 样式注入（不破坏源文件）
-│   └── ui/
-│       ├── main_window.py       # 主窗口 + overlay 绘制 + 持久化
-│       ├── settings_dialog.py   # 背景/主题/字体/质量预设/overlay 强度
-│       ├── tabs.py              # 每个 Tab 的构造器 + 富下拉框
-│       ├── file_list.py         # 拖拽、去重、目录扫描、右键菜单
-│       └── theme.py             # Dark / Light QSS
-├── scripts/
-│   ├── build_macos.sh           # macOS 打包 (venv + pyinstaller + 可选 DMG)
-│   └── build_windows.bat        # Windows 打包 (chcp 65001 + py launcher)
-└── tests/
-    ├── test_timestamps.py
-    ├── test_parsers.py
-    ├── test_ffmpeg_commands.py
-    ├── test_format_meta.py
-    ├── test_quality.py
-    ├── test_constants.py
-    └── test_integration_ffmpeg.py
-```
+## 目录
+
+- [功能一览](#功能一览)
+- [快速开始](#快速开始)
+- [CLI 用法](#cli-用法)
+- [FFmpeg 管理策略](#ffmpeg-管理策略)
+- [Windows 右键菜单（可选）](#windows-右键菜单可选)
+- [项目结构](#项目结构)
+- [打包](#打包)
+- [设计决策](#设计决策)
+- [贡献](#贡献)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
+
+---
+
+## 功能一览
+
+### 转换核心
+
+
+| 类别  | 格式                                                                     |
+| --- | ---------------------------------------------------------------------- |
+| 音频  | `mp3` · `wav` · `flac` · `aac` · `m4a` · `ogg` · `opus`                |
+| 视频  | `mp4` · `mkv` · `mov` · `avi` · `flv` · `wmv` · `webm` · `ts` · `rmvb` |
+| 字幕  | `srt` · `ass` · `ssa` · `vtt` · `lrc`                                  |
+
+
+- **音频 ↔ 音频 / 视频 ↔ 视频** 互转，使用专业级编码器参数
+- **视频 → 仅音频**：视频 Tab 下拉里的"仅音频 · MP3 / FLAC / ..."一键剥离，不用切 Tab
+- **字幕互转**：纯 Python + ffmpeg 双路径，lrc 和 ass 之间会自动走多步转换
+- **音视频合并**：从列表里取第一个音频和第一个视频合成
+- **字幕烧录**：硬编码（永久烧入画面）/ 软封装（独立轨道），支持自定义样式对话框
+
+### 质量与性能
+
+- **质量预设**：快速 / 均衡 / 高质量 三档，统一控制 libx264/x265 preset+CRF、VideoToolbox 码率、NVENC/QSV/AMF 的 CQ/QP、AAC 码率、FLAC 压缩级别
+- **跨平台硬件加速**：单个"硬件加速"开关，运行期自动识别可用编码器
+  - **macOS** · VideoToolbox（`h264_videotoolbox` / `hevc_videotoolbox` / `prores_videotoolbox`）
+  - **Windows** · 自动按 `NVENC > Quick Sync > AMF` 优先级探测 `ffmpeg -encoders`，选第一个可用的编码器族
+  - **Linux / BSD** · 软编（VAAPI/NVENC 后续版本支持）
+- **批量并发**：1–8 路或自动（按 CPU 核心数），每个任务独立取消
+- **真正可取消**：取消按钮会 `terminate()` 子进程，2 秒没退就 `kill()`
+- **视频缩放**：`1080p` / `720p` / `480p` / 自定义 `WxH`
+- **时间裁剪**：`--trim-start` / `--trim-end`（秒）
+- **音量归一化**：EBU R128 `loudnorm`
+
+### UI / 工作流
+
+- **富格式下拉**：`★ MP3 · 通用有损 · 320 kbps · 兼容性最佳` 式的分组提示
+- **实时进度**：整批完成度 + 当前文件内部进度 + ETA + `[3/10] filename.mp4` 状态
+- **文件队列**：拖拽添加、递归扫描目录、去重、右键"发送到字幕烧录"
+- **冲突策略**：跳过 / 覆盖 / 重命名 / 询问
+- **文件名模板**：`{base}` · `{date}` · `{target}` 等变量
+- **任务历史**：每次转换记录可查、可重放
+- **用户预设**：保存常用配置到命名预设（"YouTube 投稿" / "iOS 兼容" / …），一键切换
+- **系统通知 + 完成后打开输出目录**
+- **深色 / 浅色主题** + 自定义背景图 + 可调遮罩强度
+
+---
 
 ## 快速开始
 
-### 运行
+### 从源码运行
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 Main.py
+git clone https://github.com/<your-name>/Vertenda.git
+cd Vertenda
+
+python3 -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+python Main.py
 ```
+
+Python 3.9 以上皆可。首次启动会提示下载 ffmpeg（见 [FFmpeg 管理策略](#ffmpeg-管理策略)），或者你可以指向已有的 `ffmpeg`。
 
 ### 跑测试
 
 ```bash
-python3 -m pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
-78 个测试，包括真实 ffmpeg 集成测试（合成音视频 → 转换 → probe）。2.5 秒跑完，无需外部素材。
+17 个测试文件，220 个测试用例，包含真实 ffmpeg 集成测试（合成音视频 → 转换 → probe），2-3 秒跑完，无需外部素材。
 
-### 打包
+### 依赖
 
-**macOS**:
+```
+PyQt5>=5.15,<6
+psutil>=5.9
+pytest>=7.0
+winotify>=1.1       # Windows only
+```
+
+以及运行期的 `ffmpeg` / `ffprobe`（首次启动可一键下载）。
+
+---
+
+## CLI 用法
+
+GUI 与 CLI 共享同一套业务代码：**无参启动是 GUI，有参是 CLI**。
+
+### 常用形式
 
 ```bash
-scripts/build_macos.sh                     # 标准打包，生成 dist/Main.app
-scripts/build_macos.sh --download-ffmpeg   # 顺带下载一份静态 ffmpeg 覆盖 resources/
-scripts/build_macos.sh --dmg               # 再生成 DMG
-scripts/build_macos.sh --clean             # 从零建 venv 重打一次
+# 单文件转换（自动识别输入类型）
+python Main.py input.wav -f mp3
+python Main.py input.mov -f mp4 --hw-accel --quality high
+python Main.py input.srt -f lrc
+
+# 指定输出位置
+python Main.py input.mov -f mp4 -o /path/to/out.mp4
+python Main.py input.mov -f mp4 -d /output/dir/      # 只指定输出目录
 ```
 
-**Windows** (Windows 10+ 或更新):
+### 子命令
 
-```cmd
-scripts\build_windows.bat
-scripts\build_windows.bat --download-ffmpeg
-scripts\build_windows.bat --clean
+```bash
+# 烧录字幕
+python Main.py burn video.mp4 subs.srt -o out.mp4           # 硬编码（默认）
+python Main.py burn video.mp4 subs.srt -o out.mkv --soft    # 软封装
+
+# 合并音视频
+python Main.py merge audio.mp3 video.mp4 -o merged.mp4
+
+# 管理 FFmpeg 缓存
+python Main.py install-ffmpeg                               # 主动下载
+python Main.py install-ffmpeg --data-dir D:\MyTools         # 指定下载到别处
+python Main.py uninstall-ffmpeg                             # 清除（只动自己下载的）
+
+# 诊断 / 其它
+python Main.py where                                        # 打印解析到的路径与 marker
+python Main.py --version
+python Main.py --gui                                        # 明确打开 GUI
 ```
 
-- 脚本第一行 `chcp 65001` 切到 UTF-8，确保中文输出不乱码。
-- 请用 VS Code / Cursor 等能稳定保存 UTF-8 的编辑器，不要用记事本改脚本（会被改成 ANSI/GBK）。
-- 自动探测 `py -3` 或 `python`，自建 `.venv-build` 虚拟环境，不污染系统 Python。
+> 打包后直接运行 `Vertenda` / `Vertenda.exe` 即可替换上面的 `python Main.py`。
 
-spec 文件用 `SPECPATH` 动态解析路径，仓库放到哪里都能打包。
+### 运行时参数
 
-## 本次重构解决了什么
 
-### P0（修复了才能睡着觉）
+| 参数                            | 说明                                              |
+| ----------------------------- | ----------------------------------------------- |
+| `-q, --quality`               | `fast` / `balanced` / `high`（默认 `balanced`）     |
+| `--hw-accel`                  | 开启硬件加速（macOS VideoToolbox / Windows 自动选 NVENC·QSV·AMF）|
+| `--conflict`                  | `skip` / `overwrite` / `rename`（默认 `overwrite`） |
+| `--filename-template`         | 输出文件名模板，默认 `{base}`                             |
+| `--concurrency`               | `auto` 或 `1`–`8`（默认 `auto`）                     |
+| `--scale`                     | `1080p` / `720p` / `480p` / `WxH`               |
+| `--normalize`                 | 音量归一化（loudnorm EBU R128）                        |
+| `--trim-start` / `--trim-end` | 裁剪起止时间（秒）                                       |
 
-1. **真正可取消的转换**: 原先 `stop()` 只是设置了 `_running=False` flag，子进程根本不受影响。现在 `CancelToken.cancel()` 会主动 `terminate()`，2 秒后还没退就 `kill()`。
-2. **不再破坏用户源字幕**: 原先当输入就是 `.ass` 时，`inject_ass_style` 会用 `r+` 模式篡改用户的原文件。现在永远用 `tempfile`，上下文管理器保证清理。
-3. **临时文件不再泄漏**: `StyledSubtitle` 实现了 `__exit__`，无论 ffmpeg 是否崩溃都会清理。
-4. **force_style 语法修复**: 原先 `-vf subtitles=xxx:force_style=FontName=Arial,` 多了个尾部逗号，字幕样式实际没起作用；另一个分支还有完整的样式但被半路抛弃。现在只有一处定义。
-5. **subtitles= 路径转义**: 原先包含空格 / 冒号 / 单引号的路径会把 filtergraph parser 炸掉。现在有 `_escape_subtitles_filter_path`。
-6. **死代码清理**: 原先 `ffmpeg_convert` 和 `ffmpeg_convert_cmd` 几乎完全重复，前者从头到尾没人用。现在只有一份。
-7. **测试基线**: 45 个单测，覆盖所有纯函数逻辑，回归一眼就能看见。
 
-### P1（用起来明显更舒服）
+### 退出码
 
-- **单一配置源**: 所有编码参数集中在 `ffmpeg/profiles.py`。以前要改比特率得找两处。
-- **日志节流**: 150ms 内的日志合并发送，长任务不再卡 UI。
-- **异常收窄**: `except: ...` 替换为明确的 `OSError` / `SubprocessError` / `ValueError`，错误上下文写进日志。
-- **去重 O(n²) → O(1)**: `FileListWidget` 用 set 做路径缓存。
-- **文件图标 + 大小**: 列表项直接显示文件大小，不用自己去 Finder 看。
-- **拖拽进度提示**: 列表为空时显示 "拖拽文件到这里"。
-- **现代化 QSS**: 紫色主色、圆角 8-12px、柔和边框、带 hover 的按钮态。比原来的 4CAF50 绿色进度条养眼多了。
-- **状态栏**: 显示"就绪 / 处理中 / 已完成"等反馈。
-- **打开输出目录按钮**: 跑完直接点按钮进 Finder，不用找路径。
 
-### 第二轮新增（体验打磨）
+| 码   | 含义                  |
+| --- | ------------------- |
+| 0   | 成功                  |
+| 2   | 用法错误（文件不存在、参数非法）    |
+| 3   | 运行时错误（ffmpeg 失败、取消） |
+| 4   | 未找到可用的 FFmpeg       |
 
-- **格式元信息**: 下拉框显示 `★ MP3 · 通用有损 · 320 kbps · 兼容性最佳`。推荐项用星标，鼠标悬停还有 tooltip。
-- **质量预设**: 快速 / 均衡 / 高质量 单一开关 → 统一控制 libx264 preset+CRF、libx265 preset+CRF、VideoToolbox bitrate、AAC bitrate、FLAC compression level。
-- **视频 Tab 支持"仅提取音频"**: 下拉框分组展示，选 "仅音频 · MP3" 就走 extract 路径，不用切 Tab。
-- **批量进度精细化**:
-  - 粗进度条: 整批完成度
-  - 细进度条: 当前文件内部进度
-  - 状态标签: `[3/10]  filename.mp4`
-  - 时间标签: `00:01:23`（当前文件播放位置）
-  - ETA 标签: `剩余 ~ 2m15s`（前 1 秒不预估）
-- **从目录添加**: 递归扫整个文件夹，自动过滤扩展名。
-- **右键联动**: "发送到字幕烧录 (视频)"等，一次拖拽多处复用。
-- **智能 overlay**: 背景图之上叠加主题色遮罩（可调 0–100%），保证面板可读的同时保留壁纸。
-- **记住上次选择**: 四个 Tab 的格式、烧录模式、输出格式都持久化。
-- **输出目录安全检查**: 与源文件同目录时弹确认框，不再冷冰冰拒绝。
-- **窗口标题栏加副标题和质量徽章**，扫一眼就知道当前设置。
 
-### P2
-
-- `Main.spec` 用 `SPECPATH` 动态解析路径，不再硬编码 `/Users/teark/Documents/Convert/...`。
-- 设置键名集中在 `SettingsKey` 类里，拼写错误编译期可见。
-- `.gitignore` 已包含 build / __pycache__ / .DS_Store / 用户配置。
+---
 
 ## FFmpeg 管理策略
 
@@ -160,143 +186,86 @@ spec 文件用 `SPECPATH` 动态解析路径，仓库放到哪里都能打包。
 
 ### 仓库层
 
-`resources/ffmpeg` 和 `resources/ffmpeg.exe`（以及对应 `ffprobe`）不追踪到 git：
-- 二进制体积大，会让 clone 变慢；
-- 不同平台的 ffmpeg 互不兼容（macOS Mach-O、Windows PE、Linux ELF），commit 一份只能覆盖一个平台；
-- 旧版本打包时 commit 过 Homebrew 依赖的 ffmpeg，结果换机器就跑不起来。
+`resources/ffmpeg`、`resources/ffmpeg.exe`（及对应 `ffprobe`）**不追踪到 git**：
+
+- 二进制体积大会拖慢 clone
+- 不同平台互不兼容（macOS Mach-O、Windows PE、Linux ELF），commit 一份只能覆盖一个平台
+- 系统依赖的 ffmpeg（比如 Homebrew）往往携带动态库链接，换台机器就跑不起来
 
 ### 运行时的查找顺序
 
-`converter/constants.py` 的 `_resolve_executable` 按以下顺序找 ffmpeg / ffprobe，第一个能跑的就用：
+`converter/constants.py` 的 `_resolve_executable` 按以下顺序寻找 `ffmpeg` / `ffprobe`，**第一个能真正跑 `ffmpeg -version` 的就用**：
 
-1. **应用内置** `resources/ffmpeg`（PyInstaller 打包进 `_MEIPASS`）
-2. **应用数据目录缓存** `<App Data>/Convert/ffmpeg/ffmpeg`（首次运行自动下载到这里）
-3. **系统 PATH** 上的 `ffmpeg`
-4. **常见安装位置**（macOS：`/opt/homebrew/bin`、`/usr/local/bin`；Windows：`C:\Program Files\ffmpeg\bin` 等）
+1. **应用内置**：`resources/ffmpeg`（PyInstaller 打包进 `_MEIPASS`）
+2. **应用数据目录缓存**：`<App Data>/Vertenda/ffmpeg/ffmpeg`（首次运行下载到这里）
+3. **系统 PATH**：`shutil.which("ffmpeg")`
+4. **常见安装位置**（macOS `/opt/homebrew/bin`、`/usr/local/bin`；Windows `C:\Program Files\ffmpeg\bin` 等）
 
-每一步都真正跑一次 `ffmpeg -version` 验证能执行，而不是只看文件存在。所以即使 bundled 的 ffmpeg 因为缺 dylib 无法运行，也能自动回落到其它路径。
+每一步都**真正执行一次 `-version`** 验证能跑，不只是看文件存在。bundled ffmpeg 因缺动态库无法运行时也能自动回落到系统路径。
 
 ### App Data 目录
 
-| 平台 | 路径 |
-|---|---|
-| macOS | `~/Library/Application Support/Convert/` |
-| Windows | `%LOCALAPPDATA%\Convert\` |
-| Linux | `~/.local/share/Convert/` |
 
-要彻底清理程序（包括自动下载的 ffmpeg 缓存），只要删掉这个目录。程序从不修改系统 PATH、不放快捷方式在别处、不需要管理员权限。
+| 平台      | 路径                                        |
+| ------- | ----------------------------------------- |
+| macOS   | `~/Library/Application Support/Vertenda/` |
+| Windows | `%LOCALAPPDATA%\Vertenda\`                |
+| Linux   | `~/.local/share/Vertenda/`                |
+
+
+要彻底清理程序（包括自动下载的 ffmpeg 缓存），删掉这个目录即可。程序**从不**修改系统 PATH、不放启动项、不需要管理员权限。
 
 ### 首次启动：找不到 ffmpeg 怎么办
 
-程序启动时如果上述四种路径都找不到可用的 ffmpeg，弹出 **FirstRunDialog**，提供三个选择：
+启动时若四种路径都找不到可用的 ffmpeg，弹出 **FirstRunDialog**，提供三个选择：
 
-1. **自动下载（推荐）**：从对应平台的静态源下载，解压到 App Data 目录。
-   - macOS: [evermeet.cx](https://evermeet.cx/ffmpeg/) (静态，含 libass)
-   - Windows: [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (release-essentials, 含 libass)
-   - Linux: [johnvansickle.com](https://johnvansickle.com/ffmpeg/) (amd64 / arm64 静态)
-2. **指定已有 FFmpeg…**：打开文件选择器，用户指向自己已经装好的 ffmpeg。程序会把它和旁边的 ffprobe **复制**（不是链接）到 App Data 目录，下次启动直接用。
-3. **退出**：放弃启动。
+1. **自动下载（推荐）**：从对应平台的静态构建下载到 App Data 目录。
+  - macOS：[evermeet.cx](https://evermeet.cx/ffmpeg/)（静态，含 libass）
+  - Windows：[gyan.dev](https://www.gyan.dev/ffmpeg/builds/)（release-essentials，含 libass）
+  - Linux：[johnvansickle.com](https://johnvansickle.com/ffmpeg/)（amd64 / arm64 静态）
+2. **指定已有 FFmpeg…**：文件选择器选中已装好的 `ffmpeg`。程序会**复制**（不是软链）它和旁边的 `ffprobe` 到 App Data 目录。
+3. **退出**。
 
-下载时显示进度条和状态文字（"正在下载 / 解压 / 验证"）。Apple Silicon 上首次执行 x86_64 ffmpeg 需要 Rosetta 2 翻译，首启动会停留 10-20 秒在"验证"阶段，**这是正常的**。
+下载时显示进度与状态文字。Apple Silicon 首次执行 x86_64 ffmpeg 时 Rosetta 2 需要翻译，"验证"阶段可能停留 10–20 秒，属正常现象。
 
-### 打包时预置 ffmpeg（避免用户看到 FirstRunDialog）
+### 自定义数据目录（Windows C 盘紧张？）
 
-`scripts/build_*.{sh,bat} --download-ffmpeg` 会在打包前把对应平台的静态 ffmpeg 下载到 `resources/`，PyInstaller 会连同打包进 `.app`/`.exe`。这样最终用户拿到的安装包**内置了可用的 ffmpeg**，首次启动直接进入主界面。
-
-`Main.spec` 会按平台过滤：mac 打包时排除 `resources/ffmpeg.exe`，Windows 打包时排除 `resources/ffmpeg`（macOS Mach-O 二进制）。同一份仓库两边都能正确打包。
-
-### 自定义数据目录（解决 C 盘占用）
-
-Windows 用户常常 C 盘紧张，不希望在 `%LOCALAPPDATA%` 下多个 160MB。应用内提供了调节：
-
-- **首次启动时**：FirstRunDialog 上方显示"下载位置"，旁边一个"更改…"按钮
-- **任何时候**：设置 → 数据与存储 → 数据目录，改到 D 盘或其他位置
-- 老位置的缓存**不会自动迁移**。换目录之后如果真需要 ffmpeg，会在新目录重新下载一次。
+- **首次启动**：FirstRunDialog 上方显示"下载位置"和"更改…"按钮
+- **任何时候**：设置 → 数据与存储 → 数据目录，改到其他磁盘
+- 老位置的缓存**不会自动迁移**，换目录后需要时会重新下载。
 
 ### 安装 marker
 
-下载完成后在缓存目录写一个 `.installed_by_convert.json`，里面记录：
+下载完成后在缓存目录写 `.installed_by_convert.json`（文件名沿用内部标识，不随品牌改名）：
 
 ```json
 {
   "schema": 1,
   "installed_at": "2026-04-19T14:00:00Z",
   "app_version": "2.0.0",
-  "sources": ["https://evermeet.cx/ffmpeg/getrelease/zip", ...],
-  "ffmpeg_version": "ffmpeg version 8.1-tessus ...",
+  "sources": ["https://evermeet.cx/ffmpeg/getrelease/zip", "..."],
+  "ffmpeg_version": "ffmpeg version 8.1 ...",
   "platform": "darwin"
 }
 ```
 
-这个文件是**"只有我们安装的才能删"的判据**。设置里的"清除 FFmpeg 缓存"按钮仅在 marker 存在时启用，确保不会把你 `brew install ffmpeg` 的副本误删。
+这个文件是 **"只有我们安装的才能删"的判据**。设置里的"清除 FFmpeg 缓存"按钮仅在 marker 存在时启用，避免误删 `brew install ffmpeg` 的副本。
 
-## 卸载
+### 卸载
 
-我们刻意**不做**正式的 installer / 自删除逻辑，保持"拖走即干净"的 macOS 惯例和 Windows 的便携体验。正确的卸载流程：
+刻意**不做**正式 installer，保持"拖走即干净"：
 
-1. 打开 **设置 → 数据与存储**
-2. 点 **清除 FFmpeg 缓存**（会提示大小 / 来源，确认后删）
-3. （可选）点 **打开数据目录**，确认里面只剩 `converter_config.ini`，想彻底清就手动删整个目录
-4. 把 `Main.app` 拖进废纸篓 / 删除 `Main.exe` 所在目录
+1. 设置 → 数据与存储 → **清除 FFmpeg 缓存**
+2. （可选）**打开数据目录**，手动删剩余文件
+3. 把 `Vertenda.app` 拖到废纸篓 / 删除 `Vertenda.exe` 所在目录
 
-本程序**从不**修改：
-- 系统 PATH
-- Windows 注册表（除非你在设置里开启了"右键集成"，那时也只写 HKCU）
-- `/usr/local/bin` 或其他系统目录
-- 启动项 / 登录项
+本程序**从不**修改：系统 PATH、Windows 注册表（除非你开启右键集成，此时也只写 `HKCU`）、`/usr/local/bin` 之类的系统目录、启动项 / 登录项。
 
-所以即便你直接拖走了 app 再想起来还有 160MB 缓存在 app data 里，手动删掉那个目录就完事，没有任何隐藏残留。
-
-## CLI 用法
-
-GUI 和 CLI 共享同一套业务代码，无参启动是 GUI，有参是 CLI。
-
-### 常用形式（推荐）
-
-```bash
-# 单文件转换（自动识别类型）
-Main input.wav -f mp3
-Main input.mov -f mp4 --hw-accel --quality high
-Main input.srt -f lrc
-
-# 指定输出位置
-Main input.mov -f mp4 -o /path/to/out.mp4
-Main input.mov -f mp4 -d /output/dir/     # 只指定输出目录
-```
-
-### 子命令
-
-```bash
-# 烧录字幕
-Main burn video.mp4 subs.srt -o out.mp4             # 硬编码（默认）
-Main burn video.mp4 subs.srt -o out.mkv --soft      # 软封装
-
-# 合并音视频
-Main merge audio.mp3 video.mp4 -o merged.mp4
-
-# 管理 FFmpeg 缓存
-Main install-ffmpeg                                   # 主动下载
-Main install-ffmpeg --data-dir D:\MyTools            # 指定下载到别处
-Main uninstall-ffmpeg                                 # 清除（只动自己下载的）
-
-# 诊断
-Main where                                            # 打印解析到的路径、marker 信息
-Main --version
-Main --gui                                            # 明确打开 GUI
-```
-
-### 退出码
-
-| 码 | 含义 |
-|---|---|
-| 0 | 成功 |
-| 2 | 用法错误（文件不存在、参数非法） |
-| 3 | 运行时错误（ffmpeg 失败、取消） |
-| 4 | 未找到可用的 FFmpeg |
+---
 
 ## Windows 右键菜单（可选）
 
-**设置 → 转换 → 右键集成** 勾选后，在 Windows 资源管理器里右键常见的音视频/字幕文件，会多出一个子菜单：
+**设置 → 转换 → 右键集成** 勾选后，在 Windows 资源管理器里右键常见的音视频 / 字幕文件：
 
 ```
 右键 video.mp4
@@ -307,23 +276,187 @@ Main --gui                                            # 明确打开 GUI
      └─ 用 Kurisu 打开
 ```
 
-实现细节：
 - 只写 `HKCU\Software\Classes\...`（用户注册表），不需要管理员权限
-- 使用 CommandStore + SubCommands 做二级菜单，右键只多出"转换 (Kurisu)"一行，点开才展开
-- 只在 **Main.exe 是打包后的** 情况下有意义（源码运行时会指向 `Main.py` 但 Explorer 没法直接跑 .py）
-- 取消勾选 → 立即 unregister，不留痕迹
-- **只在 Windows 上显示这个开关**，其他平台看不到
+- 用 CommandStore + SubCommands 做二级菜单，右键只多"转换 (Kurisu)"一行，点开才展开
+- 取消勾选立即 unregister，不留注册表残留
+- **只在 Windows 上显示这个开关**
 
-## 已知保留的设计决策
+---
 
-1. **保留 PyQt5 而不升级到 PyQt6**：用户没要求，升级需要处理 enum 全限定名、信号类型变化等破坏性改动，属于"你没要求我做，但做了一定炸"的雷区。
-2. **LRC 时间戳毫秒精度**：LRC 标准是百分秒（cs），但市面上也有程序写 ms。parser 现在根据小数位数自适应，保持宽容。
-3. **RMVB 编码器**：原版用 `librmvb`，ffmpeg 官方不带这个编码器，需要用户自己编译。保持原样。
+## 项目结构
 
-## 后续值得做的事（没在这次 PR 里）
+```
+Vertenda/
+├── Main.py                      # 薄入口：决定 GUI / CLI 路由
+├── Main.spec                    # PyInstaller 打包配置（路径可移植）
+├── requirements.txt
+├── converter/
+│   ├── constants.py             # 扩展名、路径解析、SettingsKey
+│   ├── cli.py                   # argparse + 子命令分发
+│   ├── worker.py                # QThread 任务层
+│   ├── queue.py                 # TaskCoordinator（并发调度 + 事件流）
+│   ├── planning.py              # 批量输出路径规划（避免并发路径竞争）
+│   ├── estimator.py             # 预估时长 / 大小 / 冲突
+│   ├── presets.py               # 命名预设 + schema 迁移
+│   ├── history.py               # 任务历史持久化
+│   ├── format_meta.py           # 格式富元信息
+│   ├── fs.py                    # 冲突策略、文件名模板、磁盘检查
+│   ├── notify.py                # 系统通知（跨平台）
+│   ├── ffmpeg/
+│   │   ├── commands.py          # 命令构造（纯函数，GUI / CLI 共享）
+│   │   ├── profiles.py          # 编码器配置（参数化为 QualitySpec）
+│   │   ├── quality.py           # QualityPreset + QualitySpec
+│   │   ├── probe.py             # ffprobe 工具
+│   │   ├── runner.py            # 可取消的子进程执行器 + 进度解析
+│   │   └── installer.py         # 首次运行 / CLI 的 ffmpeg 下载器
+│   ├── subtitle/
+│   │   ├── timestamps.py        # 秒 ↔ 时间戳
+│   │   ├── parsers.py           # lrc / srt / vtt → Cue
+│   │   ├── converters.py        # Cue ↔ 文件
+│   │   ├── styling.py           # ASS 样式注入（不破坏源文件）
+│   │   └── styling_config.py    # BurnStyle 数据类
+│   ├── shell/
+│   │   └── win_registry.py      # Windows 右键菜单 HKCU 写入
+│   └── ui/
+│       ├── main_window.py       # 主窗口 + overlay + 拖拽
+│       ├── first_run_dialog.py  # 首次启动 ffmpeg 引导
+│       ├── settings_dialog.py   # 外观 / 转换 / 数据 三页
+│       ├── preset_dialog.py     # 预设管理
+│       ├── history_dialog.py    # 历史回顾
+│       ├── burn_style_dialog.py # 字幕烧录样式编辑
+│       ├── estimate_dialog.py   # 批量转换前预估
+│       ├── queue_panel.py       # 实时队列 UI
+│       ├── result_panel.py      # 批量结果汇总
+│       ├── file_list.py         # 拖拽 / 去重 / 右键
+│       ├── tabs.py              # 四个 Tab 构造器
+│       └── theme.py             # Dark / Light QSS
+├── scripts/
+│   ├── build_macos.sh           # macOS 打包（venv + pyinstaller + 可选 DMG）
+│   └── build_windows.bat        # Windows 打包（chcp 65001 + py launcher）
+└── tests/                       # 17 个测试文件，220+ 用例
+```
 
-- 换 PyQt6 / PySide6，获得更好的 HiDPI 和多显示器支持
-- 多文件并发处理（当前批量任务是串行的）
-- 批量音视频合并，而不是只取第一个
-- 字幕样式的 UI 配置项（当前硬编码粉色）
-- 用 `QSettings` 的原生方式替代 INI 文件，跨平台配置更干净
+---
+
+## 打包
+
+### macOS
+
+```bash
+scripts/build_macos.sh                     # 标准打包，生成 dist/Vertenda.app
+scripts/build_macos.sh --download-ffmpeg   # 同时下载一份静态 ffmpeg 放进 resources/
+scripts/build_macos.sh --dmg               # 再生成 DMG
+scripts/build_macos.sh --clean             # 从零建 venv 重打一次
+```
+
+### Windows 10+
+
+```cmd
+scripts\build_windows.bat
+scripts\build_windows.bat --download-ffmpeg
+scripts\build_windows.bat --clean
+```
+
+- 脚本第一行 `chcp 65001` 切到 UTF-8，确保中文输出不乱码
+- 脚本本身需用 UTF-8 编辑器（VS Code / Cursor 等）保存，避免被 Notepad 改成 ANSI/GBK 后导致乱码
+- 自动探测 `py -3` 或 `python`，自建 `.venv-build`，不污染系统 Python
+
+`Main.spec` 用 `SPECPATH` 动态解析路径，仓库放到哪里都能打包；按平台自动过滤掉对方平台的 ffmpeg 二进制，同一份仓库两边都能正确打包。
+
+---
+
+## 设计决策
+
+### GUI 与 CLI 共享同一套命令构造
+
+所有 ffmpeg 参数在 `converter/ffmpeg/commands.py` 里以纯函数形式返回 `list[str]`；`converter/ffmpeg/profiles.py` 负责编码器参数。UI 和 CLI 都只是这些纯函数的 caller，没有业务逻辑重复。
+
+### 取消语义
+
+每个 `SingleFileRunnable` 持有自己的 `CancelToken`。`cancel()` 会：
+
+1. 立即置 `CANCELLING` 状态，解锁 pause 闩
+2. `terminate()` 当前 `Popen`，2 秒后未退出则 `kill()`
+3. 在 attach 之前就已 `cancel()` 的情况也会被记录，下一个 attach 立即终止
+
+### 批量写路径竞争
+
+多路并发写同一目录时，两个 runnable 同时 `resolve_output_path("foo.mp4")` 会都算出 `foo_1.mp4` 然后互相截断。`converter/fs.py:reserve_output_path` 把"磁盘存在"与"已被其它 runnable 预约"合并成一次原子判断，由 `TaskCoordinator` 共享预约集。
+
+### 预设的 schema 迁移
+
+每个 `TaskPreset` 带 `schema_version`；字段增删改时通过 `_MIGRATIONS` 链式升级旧记录，用户永远不会因为换版本看到空白或崩溃。
+
+### 临时文件 / 字幕注入
+
+`inject_burn_style(subtitle)` 永远走 `tempfile`，上下文管理器保证 ffmpeg 崩溃也能清理；永远不 `r+` 写用户传入的源文件。
+
+### 子路径转义
+
+`subtitles=path:force_style=...` 这个 filtergraph 对路径里的空格、冒号、单引号非常敏感。`_escape_subtitles_filter_path` 专门处理；有完整测试覆盖。
+
+### Windows 硬件加速的检测策略
+
+单开关暴露给用户、内部自动挑选。首次用到时跑一次 `ffmpeg -hide_banner -encoders`，按 **NVENC > QSV > AMF** 的优先级选第一个可用的族，结果在进程内缓存。选择这个顺序的理由：
+
+- NVENC 在同码率下画质通常最好，驱动稳定性高
+- QSV 几乎所有带核显的 Intel CPU 都支持，覆盖面广但画质一般
+- AMF 只有 AMD 显卡用，且在 ffmpeg 的实现历史较新、参数文档较少
+
+**一个刻意的保守决定**：Windows 上 `use_hw=True` 时我们**不传 `-hwaccel` 输入标志**，只用硬件编码器、不用硬件解码器。因为 `-hwaccel cuda` 在缺少对应解码器的 stock ffmpeg 上会直接 fail，而仅编码硬件化就能拿到大部分加速。全链路硬件（解 + 编）作为 v2.1 的增强项保留。
+
+编码器参数统一成 CRF-like 数值（`-cq` / `-global_quality` / `-qp_*`），让快速/均衡/高质量三档在所有编码器上语义一致，用户不用记每种 GPU 的独特调参逻辑。
+
+### 硬编码取舍
+
+- **PyQt5 而非 PyQt6**：PyQt6 的 enum 全限定、signal 语法、高 DPI 模型都是破坏性变更；目前 PyQt5 够用且测试覆盖齐。欢迎 PR 迁移。
+- **LRC 毫秒精度**：LRC 标准只到百分秒（cs），但实际存在写 ms 的文件。parser 根据小数位数自适应。
+- **RMVB**：ffmpeg 官方不带 `librmvb`，打包不内置；需要用户自行提供支持该编码器的 ffmpeg。
+- **Linux 暂无硬件加速**：VAAPI/NVENC on Linux 是可行的，但需要更精细的检测（`/dev/dri/*` 存在性 + 编码器列表交叉判定），作为未来版本的功能。
+
+---
+
+## 贡献
+
+欢迎 Issue / PR。建议：
+
+- 开 PR 前跑一次 `python -m pytest tests/ -v`，纯函数改动应该秒过
+- UI 改动附截图；涉及 ffmpeg 命令构造时请补一个 `test_ffmpeg_commands.py` 用例
+- 新功能若引入配置项，记得同步 `SettingsKey` 常量 + 必要时更新 `_MIGRATIONS`
+- 不向仓库提交 `resources/ffmpeg`* 二进制；那是用户运行期或打包期才产生的
+- 报 bug 时带上 `python Main.py where` 的输出，能省掉一半来回
+
+---
+
+## Acknowledgments
+
+Vertenda 由人类作者与 AI 结对编程共同构建，工具链是 [Cursor](https://cursor.com) IDE。
+
+AI 协作者在这个项目里有一个稳定的代号 **Kurisu**（取自牧濑红莉栖，*Steins;Gate* 的 Lab Member #004）——这也是为什么仓库里到处能看到这个名字：
+
+- macOS bundle identifier `com.kurisu.vertenda`
+- Qt organization name `Kurisu`
+- Windows 资源管理器右键菜单 `转换 (Kurisu)`
+
+把它当成一个一以贯之的内部梗 + 诚实的 credit line 就好。所有代码经过人类作者审阅、测试、调试；bug 归我，巧妙的部分归我们两个。
+
+*Bugs are mine; clever bits are ours.*
+
+---
+
+## License
+
+本项目以 [GNU General Public License v3.0](./LICENSE) 发布。
+
+依据 GPL-3.0：任何再分发、修改、衍生作品必须同样以 GPL-3.0 开源，并带上源代码。
+
+第三方依赖：
+
+- **FFmpeg** · LGPL / GPL（由程序调用为外部进程；未静态链接）
+- **PyQt5** · GPL-3.0 / 商业双许可（本项目使用 GPL-3.0 分支）
+- **psutil** · BSD-3-Clause
+- **winotify** · MIT
+
+---
+
+盐酸转换器 · Vertenda · v2.0.0 · Built with Kurisu · GPL-3.0

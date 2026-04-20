@@ -4,9 +4,9 @@
 Stores the binaries in the OS-standard per-user data directory so a clean
 uninstall = remove that directory. We never touch the system PATH.
 
-  macOS:   ~/Library/Application Support/Convert/ffmpeg/
-  Windows: %LOCALAPPDATA%\\Convert\\ffmpeg\\
-  Linux:   ~/.local/share/Convert/ffmpeg/   (best-effort; distros vary)
+  macOS:   ~/Library/Application Support/Vertenda/ffmpeg/
+  Windows: %LOCALAPPDATA%\\Vertenda\\ffmpeg\\
+  Linux:   ~/.local/share/Vertenda/ffmpeg/   (best-effort; distros vary)
 
 Download sources (all current as of 2024+):
   macOS   : evermeet.cx (static, includes libass)
@@ -34,11 +34,14 @@ from pathlib import Path
 from typing import Callable
 
 
-APP_FOLDER_NAME = "Convert"
+APP_FOLDER_NAME = "Vertenda"
+# The marker filename is kept as the historic "convert" identifier: it is an
+# internal-only file used to decide "was this cache installed by us?" and
+# changing it would orphan existing caches on upgrade. Not a branding surface.
 INSTALL_MARKER_NAME = ".installed_by_convert.json"
 
 
-# User-selectable override. When set, ffmpeg is cached under <override>/Convert/
+# User-selectable override. When set, ffmpeg is cached under <override>/Vertenda/
 # rather than the platform default. Managed via `set_data_dir_override` + reads
 # from QSettings upstream (kept out of this module to avoid a Qt dependency).
 _data_dir_override: Path | None = None
@@ -49,7 +52,7 @@ def set_data_dir_override(path: str | Path | None) -> None:
 
     Pass `None` or an empty string to revert to the platform default.
     The override should be an existing writable directory; we create our
-    own ``Convert/`` subdir inside it.
+    own ``Vertenda/`` subdir inside it.
     """
     global _data_dir_override
     if not path:
@@ -189,7 +192,7 @@ StatusCallback = Callable[[str], None]         # human-readable stage label
 
 def _download(url: str, dest: Path, on_progress: ProgressCallback | None = None,
               chunk_size: int = 64 * 1024, cancel_flag: threading.Event | None = None) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "Convert/2.0 (+kurisu)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Vertenda/2.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         read = 0

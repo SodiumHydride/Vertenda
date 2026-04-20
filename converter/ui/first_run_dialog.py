@@ -290,9 +290,9 @@ class FirstRunDialog(QDialog):
 
     # ---- Data directory override -------------------------------------
     def _pick_data_dir(self) -> None:
-        current = str(app_data_dir().parent)  # default parent (excluding "Convert")
+        current = str(app_data_dir().parent)  # default parent (excluding "Vertenda")
         chosen = QFileDialog.getExistingDirectory(
-            self, "选择下载位置的父目录（其下会新建 Convert/ 子目录）", current,
+            self, "选择下载位置的父目录（其下会新建 Vertenda/ 子目录）", current,
         )
         if not chosen:
             return

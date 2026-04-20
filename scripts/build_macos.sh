@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# 盐酸转换器 macOS 打包脚本
+# 盐酸转换器 · Vertenda · macOS packaging script
 #
 # 用法:
 #   scripts/build_macos.sh [options]
@@ -116,28 +116,28 @@ if [[ -x resources/ffmpeg ]]; then
 fi
 
 # ---- clean previous artifacts -----------------------------------------------
-log "清理旧的 build / dist / Main.app"
-rm -rf build dist Main.app
+log "清理旧的 build / dist / Vertenda.app"
+rm -rf build dist Vertenda.app
 
 # ---- run pyinstaller --------------------------------------------------------
 log "开始 PyInstaller 打包"
 pyinstaller Main.spec --clean --noconfirm
 
-if [[ ! -d "dist/Main.app" ]]; then
-    die "PyInstaller 未生成 dist/Main.app，请检查上面的输出。"
+if [[ ! -d "dist/Vertenda.app" ]]; then
+    die "PyInstaller 未生成 dist/Vertenda.app，请检查上面的输出。"
 fi
 
-APP_SIZE="$(du -sh dist/Main.app | cut -f1)"
-log "打包完成: dist/Main.app ($APP_SIZE)"
+APP_SIZE="$(du -sh dist/Vertenda.app | cut -f1)"
+log "打包完成: dist/Vertenda.app ($APP_SIZE)"
 
 # ---- optional: DMG ----------------------------------------------------------
 if [[ "$MAKE_DMG" == "1" ]]; then
-    DMG_PATH="dist/Convert-$(date +%Y%m%d).dmg"
+    DMG_PATH="dist/Vertenda-$(date +%Y%m%d).dmg"
     log "生成 DMG: $DMG_PATH"
     rm -f "$DMG_PATH"
-    hdiutil create -srcfolder dist/Main.app -volname "Convert" \
+    hdiutil create -srcfolder dist/Vertenda.app -volname "Vertenda" \
         -format UDZO -quiet "$DMG_PATH"
     log "DMG 生成完毕: $DMG_PATH ($(du -sh "$DMG_PATH" | cut -f1))"
 fi
 
-log "✓ 全部完成。可以直接 'open dist/Main.app' 试运行。"
+log "✓ 全部完成。可以直接 'open dist/Vertenda.app' 试运行。"

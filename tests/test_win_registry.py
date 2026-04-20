@@ -45,7 +45,7 @@ class TestPaths:
 
 class TestCommandLine:
     def test_quotes_exe_path(self):
-        line = build_command_line(r"C:\Program Files\Convert\Main.exe", 'convert "%1" -f mp3')
+        line = build_command_line(r"C:\Program Files\Vertenda\Vertenda.exe", 'convert "%1" -f mp3')
         assert line.startswith('"C:\\')
         assert line.endswith('-f mp3')
 
